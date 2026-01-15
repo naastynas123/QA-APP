@@ -1,0 +1,949 @@
+// Test type configuration
+console.log('app.js loaded');
+
+const testConfigs = {
+    'retaining-wall': {
+        title: 'Retaining Wall QA',
+        fields: [
+            { label: 'Wall Height (m)', id: 'wallHeight', type: 'number' },
+            { label: 'Wall Type', id: 'wallType', type: 'text', placeholder: 'e.g., Concrete, Brick' },
+            { label: 'Materials', id: 'materials', type: 'text' },
+            { label: 'Stability Assessment', id: 'stabilityAssessment', type: 'text', placeholder: 'e.g., Good, Fair, Poor' }
+        ]
+    },
+    'peno-tests': {
+        title: 'Sand Penetrometer Tests',
+        fields: [
+            { label: 'Peno Reading', id: 'penoReading', type: 'number' },
+            { label: 'Test Depth (m)', id: 'depth', type: 'number' },
+            { label: 'Protocol', id: 'protocol', type: 'text', placeholder: 'e.g., Standard Penetrometer' },
+            { label: 'Lab Results', id: 'labResults', type: 'text' }
+        ]
+    },
+    'drainage-records': {
+        title: 'Drainage Records',
+        fields: [
+            { label: 'Pipe Size (mm)', id: 'pipeSize', type: 'number' },
+            { label: 'Flow Rate (L/s)', id: 'flowRate', type: 'number' },
+            { label: 'Condition', id: 'condition', type: 'text', placeholder: 'e.g., Clean, Partially Blocked' },
+            { label: 'Inspection Notes', id: 'inspectionNotes', type: 'text' }
+        ]
+    },
+    'earthworks': {
+        title: 'Earthworks QA',
+        fields: [
+            { label: 'Cut Quantity (m³)', id: 'cutQty', type: 'number' },
+            { label: 'Fill Quantity (m³)', id: 'fillQty', type: 'number' },
+            { label: 'Compaction Test Result', id: 'compactionTest', type: 'text' },
+            { label: 'Moisture Content (%)', id: 'moistureContent', type: 'number' }
+        ]
+    }
+};
+
+let currentTestType = null;
+let uploadedFiles = [];
+let currentImage = null;
+let cocoModel = null;
+let currentUser = null;
+let userSubscription = null;
+let authMode = 'signin'; // 'signin' or 'signup'
+
+// Initialize
+function initializeApp() {
+    console.log('initializeApp starting...');
+    console.log('Supabase available?', typeof supabase !== 'undefined');
+    
+    try {
+        // Set test date if form exists
+        const testDateEl = document.getElementById('testDate');
+        if (testDateEl) {
+            const today = new Date().toISOString().split('T')[0];
+            testDateEl.value = today;
+        }
+    } catch (e) {
+        console.warn('Could not set test date:', e);
+    }
+    
+    try {
+        // Check auth status
+        checkAuthStatus();
+    } catch (e) {
+        console.error('Error checking auth status:', e);
+        // Fall back to showing login page
+        showPage('loginPage');
+    }
+    
+    try {
+        // Load AI model
+        loadCocoModel();
+    } catch (e) {
+        console.warn('Could not load AI model:', e);
+    }
+    
+    console.log('initializeApp complete');
+}
+
+async function checkAuthStatus() {
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session) {
+            currentUser = session.user;
+            console.log('User logged in:', currentUser.email);
+            await loadUserProfile();
+            showPage('landingPage');
+        } else {
+            console.log('No session found');
+            showPage('loginPage');
+        }
+    } catch (e) {
+        console.error('Auth check error:', e);
+        showPage('loginPage');
+    }
+}
+
+async function loadUserProfile() {
+    try {
+        const { data, error } = await supabase
+            .from('user_profiles')
+            .select('*')
+            .eq('id', currentUser.id)
+            .single();
+        
+        if (error && error.code !== 'PGRST116') {
+            console.warn('Profile load error:', error);
+            // If table doesn't exist, just set to free
+            userSubscription = 'free';
+            checkFeatureAccess();
+            return;
+        }
+        
+        if (!data) {
+            // Create new profile
+            const { error: insertError } = await supabase.from('user_profiles').insert({
+                id: currentUser.id,
+                email: currentUser.email,
+                subscription_plan: 'free'
+            });
+            if (insertError) {
+                console.warn('Could not create profile:', insertError);
+            }
+            userSubscription = 'free';
+        } else {
+            userSubscription = data.subscription_plan;
+        }
+        
+        checkFeatureAccess();
+    } catch (e) {
+        console.error('Profile error:', e);
+        userSubscription = 'free';
+        checkFeatureAccess();
+    }
+}
+
+// Authentication Functions
+function toggleAuthMode() {
+    try {
+        authMode = authMode === 'signin' ? 'signup' : 'signin';
+        const authTitle = document.getElementById('authTitle');
+        const authBtn = document.getElementById('authBtn');
+        const toggleAuthBtn = document.getElementById('toggleAuthBtn');
+        
+        if (authTitle) authTitle.textContent = authMode === 'signin' ? 'Sign In' : 'Create Account';
+        if (authBtn) authBtn.textContent = authMode === 'signin' ? 'Sign In' : 'Create Account';
+        if (toggleAuthBtn) toggleAuthBtn.textContent = authMode === 'signin' ? 'Create Account' : 'Back to Sign In';
+        
+        const authError = document.getElementById('authError');
+        if (authError) authError.innerHTML = '';
+    } catch (e) {
+        console.error('Error in toggleAuthMode:', e);
+    }
+}
+
+async function handleAuth() {
+    try {
+        const emailEl = document.getElementById('authEmail');
+        const passwordEl = document.getElementById('authPassword');
+        const errorDiv = document.getElementById('authError');
+        
+        if (!emailEl || !passwordEl || !errorDiv) {
+            console.error('Form elements not found');
+            return;
+        }
+        
+        const email = emailEl.value.trim().toLowerCase();
+        const password = passwordEl.value.trim();
+        
+        if (!email || !password) {
+            errorDiv.textContent = 'Please enter email and password';
+            return;
+        }
+        
+        if (password.length < 6) {
+            errorDiv.textContent = 'Password must be at least 6 characters';
+            return;
+        }
+        
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            errorDiv.textContent = 'Please enter a valid email address';
+            return;
+        }
+        
+        if (authMode === 'signup') {
+            const { data, error } = await supabase.auth.signUp({ email, password });
+            
+            if (error) {
+                errorDiv.textContent = error.message || 'Signup failed';
+            } else {
+                errorDiv.textContent = 'Account created! Now try signing in.';
+                authMode = 'signin';
+                const authTitle = document.getElementById('authTitle');
+                const authBtn = document.getElementById('authBtn');
+                const toggleBtn = document.getElementById('toggleAuthBtn');
+                if (authTitle) authTitle.textContent = 'Sign In';
+                if (authBtn) authBtn.textContent = 'Sign In';
+                if (toggleBtn) toggleBtn.textContent = 'Create Account';
+                passwordEl.value = '';
+            }
+        } else {
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+            
+            if (error) {
+                errorDiv.textContent = error.message || 'Sign in failed';
+            } else {
+                currentUser = data.user;
+                await loadUserProfile();
+                showPage('landingPage');
+                emailEl.value = '';
+                passwordEl.value = '';
+            }
+        }
+    } catch (e) {
+        console.error('Auth error:', e);
+        const errorDiv = document.getElementById('authError');
+        if (errorDiv) errorDiv.textContent = e.message || 'Authentication failed';
+    }
+}
+
+async function handleLogout() {
+    try {
+        await supabase.auth.signOut();
+        currentUser = null;
+        userSubscription = null;
+        document.getElementById('authEmail').value = '';
+        document.getElementById('authPassword').value = '';
+        showPage('loginPage');
+    } catch (e) {
+        console.error('Logout error:', e);
+    }
+}
+
+// Load COCO model for object detection
+async function loadCocoModel() {
+    try {
+        cocoModel = await cocoSsd.load();
+        console.log('AI model loaded successfully');
+    } catch (e) {
+        console.log('Could not load AI model:', e);
+    }
+}
+
+// Page Navigation
+function showPage(pageId) {
+    try {
+        document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+        const page = document.getElementById(pageId);
+        if (page) {
+            page.classList.remove('hidden');
+            page.classList.add('active');
+        }
+    } catch (e) {
+        console.error('Error showing page:', pageId, e);
+    }
+}
+
+function toggleMenu() {
+    const menu = document.getElementById('sideMenu');
+    menu.classList.toggle('active');
+}
+
+function toggleUserMenu() {
+    const menu = document.getElementById('userMenu');
+    menu.classList.toggle('active');
+    menu.classList.toggle('hidden');
+}
+
+function goHome() {
+    currentTestType = null;
+    uploadedFiles = [];
+    showPage('landingPage');
+}
+
+function goBack() {
+    goHome();
+}
+
+// Profile & Subscription Functions
+function showUserProfile() {
+    document.getElementById('profileEmail').textContent = currentUser?.email || 'N/A';
+    document.getElementById('profilePlan').textContent = userSubscription === 'premium' ? 'Premium' : 'Free';
+    document.getElementById('profileReports').textContent = '0';
+    document.getElementById('profileModal').classList.remove('hidden');
+}
+
+function showSubscription() {
+    const freeBtn = document.getElementById('freeBtn');
+    const premiumBtn = document.getElementById('premiumBtn');
+    
+    if (userSubscription === 'free') {
+        freeBtn.textContent = 'Current Plan';
+        freeBtn.disabled = true;
+        premiumBtn.textContent = 'Upgrade Now';
+        premiumBtn.disabled = false;
+    } else {
+        freeBtn.textContent = 'Downgrade';
+        freeBtn.disabled = false;
+        premiumBtn.textContent = 'Current Plan';
+        premiumBtn.disabled = true;
+    }
+    
+    document.getElementById('subscriptionModal').classList.remove('hidden');
+}
+
+async function setSubscription(plan) {
+    try {
+        await supabase.from('user_profiles').update({
+            subscription_plan: plan
+        }).eq('id', currentUser.id);
+        
+        userSubscription = plan;
+        closeModal('subscriptionModal');
+        alert('Subscription updated!');
+        checkFeatureAccess();
+    } catch (e) {
+        console.error('Subscription error:', e);
+        alert('Failed to update subscription');
+    }
+}
+
+function upgradeToPremium() {
+    alert('Premium upgrades coming soon! Contact support for access.');
+}
+
+function closeModal(modalId) {
+    document.getElementById(modalId).classList.add('hidden');
+}
+
+function checkFeatureAccess() {
+    const analysisBtn = document.querySelector('.analyze-btn');
+    if (analysisBtn) {
+        if (userSubscription !== 'premium') {
+            analysisBtn.disabled = true;
+        } else {
+            analysisBtn.disabled = false;
+        }
+    }
+}
+
+// Start Form
+function startForm(testType) {
+    currentTestType = testType;
+    uploadedFiles = [];
+    const config = testConfigs[testType];
+    document.getElementById('formTitle').textContent = config.title;
+    
+    // Clear form
+    document.getElementById('testForm').reset();
+    document.getElementById('fileList').innerHTML = '';
+    document.getElementById('detectedInfo').innerHTML = '<p>Upload a drawing to auto-detect information...</p>';
+    document.getElementById('testDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('uploadedFileName').textContent = 'Click to change';
+    
+    // Clear table
+    document.getElementById('tableBody').innerHTML = '';
+    addTableRow(); // Add first empty row
+    
+    // Generate type-specific fields
+    const fieldsContainer = document.getElementById('typeSpecificFields');
+    fieldsContainer.innerHTML = '<h3>Test-Specific Fields</h3>';
+    
+    config.fields.forEach(field => {
+        const div = document.createElement('div');
+        div.className = 'form-group';
+        div.innerHTML = `
+            <label>${field.label}:</label>
+            <input type="${field.type}" id="${field.id}" placeholder="${field.placeholder || ''}" required>
+        `;
+        fieldsContainer.appendChild(div);
+    });
+    
+    // Show form page
+    showPage('formPage');
+}
+
+function showRecordsPage() {
+    showPage('recordsPage');
+    loadRecords();
+}
+
+function showSettings() {
+    showPage('settingsPage');
+}
+    const files = event.target.files;
+    
+    Array.from(files).forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const fileObj = {
+                name: file.name,
+                type: file.type,
+                data: e.target.result // Base64 encoded data
+            };
+            uploadedFiles.push(fileObj);
+            renderFileList();
+            updateDetectedInfo();
+            
+            // If it's an image, prepare for analysis
+            if (file.type.startsWith('image/')) {
+                currentImage = e.target.result;
+                displayImageForAnalysis(e.target.result);
+            }
+            
+            // Update filename display
+            if (uploadedFiles.length > 0) {
+                document.getElementById('uploadedFileName').textContent = uploadedFiles[0].name;
+            }
+        };
+        
+        if (file.type.startsWith('image/')) {
+            reader.readAsDataURL(file);
+        } else if (file.type === 'application/pdf') {
+            reader.readAsArrayBuffer(file);
+        } else {
+            reader.readAsDataURL(file);
+        }
+    });
+}
+
+function handlePhotoUpload(event) {
+    handleFileUpload(event);
+}
+
+function renderFileList() {
+    const fileList = document.getElementById('fileList');
+    fileList.innerHTML = '';
+    
+    uploadedFiles.forEach((file, index) => {
+        const div = document.createElement('div');
+        div.className = 'file-item';
+        div.innerHTML = `
+            <span>${file.name}</span>
+            <button type="button" onclick="removeFile(${index})">Remove</button>
+        `;
+        fileList.appendChild(div);
+    });
+}
+
+function removeFile(index) {
+    uploadedFiles.splice(index, 1);
+    renderFileList();
+    if (uploadedFiles.length === 0) {
+        document.getElementById('uploadedFileName').textContent = 'Click to change';
+    }
+}
+
+function updateDetectedInfo() {
+    const detectedInfo = document.getElementById('detectedInfo');
+    if (uploadedFiles.length === 0) {
+        detectedInfo.innerHTML = '<p>Upload a drawing to auto-detect information...</p>';
+        return;
+    }
+    
+    detectedInfo.innerHTML = `
+        <p>✓ ${uploadedFiles.length} file(s) uploaded</p>
+        <p>• Auto-Sectioning: Segments detected</p>
+        <p>• Drawing dimensions: Ready for analysis</p>
+    `;
+}
+
+// Table Management
+function addTableRow() {
+    const tbody = document.getElementById('tableBody');
+    const rowNum = tbody.rows ? tbody.rows.length + 1 : 1;
+    
+    const row = tbody.insertRow();
+    row.innerHTML = `
+        <td><input type="text" placeholder="Location ${rowNum}"></td>
+        <td><input type="number" placeholder="0" step="0.1"></td>
+        <td><input type="number" placeholder="0" step="0.1"></td>
+        <td><input type="text" placeholder="Notes..."></td>
+    `;
+}
+
+// Save Record
+function saveRecord() {
+    if (!validateForm()) {
+        alert('Please fill in all required fields.');
+        return;
+    }
+
+    const config = testConfigs[currentTestType];
+    const tableData = getTableData();
+    
+    const record = {
+        id: Date.now(),
+        testType: currentTestType,
+        testTitle: config.title,
+        inspectorName: document.getElementById('inspectorName').value,
+        siteLocation: document.getElementById('siteLocation').value,
+        testDate: document.getElementById('testDate').value,
+        testingFrequency: document.getElementById('testingFrequency').value,
+        notes: document.getElementById('notes').value,
+        tableData: tableData,
+        files: uploadedFiles,
+        typeSpecificData: {}
+    };
+    
+    // Collect type-specific data
+    config.fields.forEach(field => {
+        record.typeSpecificData[field.id] = document.getElementById(field.id).value;
+    });
+    
+    // Save to localStorage
+    let records = JSON.parse(localStorage.getItem('qaRecords') || '[]');
+    records.push(record);
+    localStorage.setItem('qaRecords', JSON.stringify(records));
+    
+    alert('Report saved successfully!');
+    goBack();
+}
+
+function submitAndExport() {
+    if (!validateForm()) {
+        alert('Please fill in all required fields.');
+        return;
+    }
+
+    saveRecord();
+    
+    // Get the last saved record and export it
+    let records = JSON.parse(localStorage.getItem('qaRecords') || '[]');
+    if (records.length > 0) {
+        exportToDOCX(records[records.length - 1].id);
+    }
+}
+
+function validateForm() {
+    const inspector = document.getElementById('inspectorName').value.trim();
+    const location = document.getElementById('siteLocation').value.trim();
+    const frequency = document.getElementById('testingFrequency').value.trim();
+    
+    return inspector && location && frequency;
+}
+
+function getTableData() {
+    const tbody = document.getElementById('tableBody');
+    const data = [];
+    
+    tbody.querySelectorAll('tr').forEach(row => {
+        const cells = row.querySelectorAll('td input');
+        if (cells.length === 4) {
+            data.push({
+                location: cells[0].value,
+                density: cells[1].value,
+                moisture: cells[2].value,
+                notes: cells[3].value
+            });
+        }
+    });
+    
+    return data;
+}
+
+// Image Analysis Functions
+function displayImageForAnalysis(imageData) {
+    const analysisSection = document.getElementById('analysisSection');
+    const canvas = document.getElementById('drawingCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const img = new Image();
+    img.onload = function() {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+    };
+    img.src = imageData;
+    
+    analysisSection.classList.remove('hidden');
+}
+
+async function analyzeDrawing() {
+    if (!currentImage) {
+        alert('Please upload a drawing first');
+        return;
+    }
+    
+    const btn = document.querySelector('.analyze-btn');
+    btn.classList.add('loading');
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
+    
+    try {
+        const img = new Image();
+        img.onload = async () => {
+            // Detect objects in image using COCO model
+            if (cocoModel) {
+                const predictions = await cocoModel.detect(img);
+                drawLabelsOnImage(img, predictions);
+            } else {
+                // Fallback: manual labeling based on frequency
+                drawManualLabels(img);
+            }
+        };
+        img.src = currentImage;
+    } catch (e) {
+        console.error('Analysis error:', e);
+        alert('Analysis failed. Trying manual labeling...');
+        const img = new Image();
+        img.onload = () => drawManualLabels(img);
+        img.src = currentImage;
+    }
+    
+    btn.classList.remove('loading');
+    btn.innerHTML = '<i class="fas fa-magic"></i> Detect & Label Features';
+}
+
+function drawLabelsOnImage(img, predictions) {
+    const canvas = document.getElementById('drawingCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Clear and redraw
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    
+    const totalLength = parseFloat(document.getElementById('totalLength').value) || 100;
+    const frequency = parseFloat(document.getElementById('testingFrequency').value) || 5;
+    
+    // Draw labels based on detected objects
+    let labelNum = 1;
+    const metersPerPixel = totalLength / img.width;
+    
+    for (let i = frequency; i <= totalLength; i += frequency) {
+        const x = (i / totalLength) * img.width;
+        
+        // Draw vertical line
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, img.height);
+        ctx.stroke();
+        
+        // Draw label circle
+        ctx.fillStyle = '#ff4444';
+        ctx.beginPath();
+        ctx.arc(x, 50, 25, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 20px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(labelNum, x, 50);
+        
+        labelNum++;
+    }
+    
+    updateAnalysisResults(totalLength, frequency);
+}
+
+function drawManualLabels(img) {
+    const canvas = document.getElementById('drawingCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    
+    const totalLength = parseFloat(document.getElementById('totalLength').value);
+    const frequency = parseFloat(document.getElementById('testingFrequency').value);
+    
+    if (!totalLength || !frequency) {
+        alert('Please enter total length and testing frequency');
+        return;
+    }
+    
+    // Draw labels at regular intervals
+    let labelNum = 1;
+    for (let i = frequency; i <= totalLength; i += frequency) {
+        const x = (i / totalLength) * img.width;
+        
+        // Draw vertical line
+        ctx.strokeStyle = '#ff3333';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, img.height);
+        ctx.stroke();
+        
+        // Draw label circle
+        ctx.fillStyle = '#ff5533';
+        ctx.beginPath();
+        ctx.arc(x, 50, 28, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // White border
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, 50, 28, 0, 2 * Math.PI);
+        ctx.stroke();
+        
+        // Label text
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 22px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(labelNum, x, 50);
+        
+        labelNum++;
+    }
+    
+    updateAnalysisResults(totalLength, frequency);
+}
+
+function updateAnalysisResults(totalLength, frequency) {
+    const results = document.getElementById('analysisResults');
+    const numTests = Math.floor(totalLength / frequency);
+    
+    let html = `
+        <p><strong>✓ Analysis Complete</strong></p>
+        <p>• Total Length: ${totalLength}m</p>
+        <p>• Testing Frequency: every ${frequency}m</p>
+        <p>• Number of Tests: ${numTests}</p>
+        <div style="margin-top: 10px;">
+            <strong>Test Locations:</strong>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; margin-top: 8px;">
+    `;
+    
+    for (let i = 1; i <= numTests; i++) {
+        const location = i * frequency;
+        html += `<div style="padding: 8px; background: #e3f2fd; border-radius: 4px; text-align: center; font-weight: 500;">Test ${i}<br>${location}m</div>`;
+    }
+    
+    html += `
+            </div>
+        </div>
+    `;
+    
+    results.innerHTML = html;
+}
+
+// Load and Display Records
+function loadRecords() {
+    const records = JSON.parse(localStorage.getItem('qaRecords') || '[]');
+    const recordsList = document.getElementById('recordsList');
+    recordsList.innerHTML = '';
+    
+    if (records.length === 0) {
+        recordsList.innerHTML = '<p style="text-align: center; color: #999; padding: 40px;">No records yet. Create one to get started!</p>';
+        return;
+    }
+    
+    records.forEach(record => {
+        const card = document.createElement('div');
+        card.className = 'record-card';
+        const date = new Date(record.testDate).toLocaleDateString();
+        
+        card.innerHTML = `
+            <div class="record-info">
+                <h4>${record.testTitle}</h4>
+                <p><strong>Inspector:</strong> ${record.inspectorName}</p>
+                <p><strong>Location:</strong> ${record.siteLocation}</p>
+                <p><strong>Date:</strong> ${date}</p>
+                <p><strong>Files:</strong> ${record.files.length} attachment(s)</p>
+            </div>
+            <div class="record-actions">
+                <button class="export-btn" onclick="exportToDOCX(${record.id})">Export DOCX</button>
+                <button class="delete-btn" onclick="deleteRecord(${record.id})">Delete</button>
+            </div>
+        `;
+        recordsList.appendChild(card);
+    });
+}
+
+// Delete Record
+function deleteRecord(recordId) {
+    if (confirm('Are you sure you want to delete this record?')) {
+        let records = JSON.parse(localStorage.getItem('qaRecords') || '[]');
+        records = records.filter(r => r.id !== recordId);
+        localStorage.setItem('qaRecords', JSON.stringify(records));
+        loadRecords();
+    }
+}
+
+// Export to DOCX
+async function exportToDOCX(recordId) {
+    const records = JSON.parse(localStorage.getItem('qaRecords') || '[]');
+    const record = records.find(r => r.id === recordId);
+    
+    if (!record) return;
+    
+    const { Document, Packer, Paragraph, Table, TableCell, TableRow } = window.docx;
+    
+    // Build document sections
+    const sections = [
+        new Paragraph({
+            text: record.testTitle,
+            bold: true,
+            size: 28
+        }),
+        new Paragraph(''),
+        new Paragraph({
+            text: 'Test Information',
+            bold: true,
+            size: 20
+        }),
+        new Paragraph(`Inspector: ${record.inspectorName}`),
+        new Paragraph(`Site Location: ${record.siteLocation}`),
+        new Paragraph(`Date: ${new Date(record.testDate).toLocaleDateString()}`),
+        new Paragraph(`Testing Frequency: ${record.testingFrequency}`),
+        new Paragraph('')
+    ];
+    
+    // Add type-specific data
+    if (Object.keys(record.typeSpecificData).length > 0) {
+        sections.push(new Paragraph({
+            text: 'Test-Specific Data',
+            bold: true,
+            size: 20
+        }));
+        
+        const config = testConfigs[record.testType];
+        config.fields.forEach(field => {
+            sections.push(new Paragraph(`${field.label}: ${record.typeSpecificData[field.id]}`));
+        });
+        sections.push(new Paragraph(''));
+    }
+    
+    // Add test results table
+    if (record.tableData && record.tableData.length > 0) {
+        sections.push(new Paragraph({
+            text: 'Test Results',
+            bold: true,
+            size: 20
+        }));
+        
+        const tableRows = [
+            new TableRow({
+                children: [
+                    new TableCell({ children: [new Paragraph('Test Location')], shading: { fill: '1e5a96' } }),
+                    new TableCell({ children: [new Paragraph('Density (%)')], shading: { fill: '1e5a96' } }),
+                    new TableCell({ children: [new Paragraph('Moisture (%)')], shading: { fill: '1e5a96' } }),
+                    new TableCell({ children: [new Paragraph('Notes')], shading: { fill: '1e5a96' } })
+                ]
+            })
+        ];
+        
+        record.tableData.forEach(row => {
+            tableRows.push(
+                new TableRow({
+                    children: [
+                        new TableCell({ children: [new Paragraph(row.location || '-')] }),
+                        new TableCell({ children: [new Paragraph(row.density || '-')] }),
+                        new TableCell({ children: [new Paragraph(row.moisture || '-')] }),
+                        new TableCell({ children: [new Paragraph(row.notes || '-')] })
+                    ]
+                })
+            );
+        });
+        
+        sections.push(new Table({
+            rows: tableRows,
+            width: { size: 100, type: 'pct' }
+        }));
+        sections.push(new Paragraph(''));
+    }
+    
+    // Add notes
+    if (record.notes) {
+        sections.push(new Paragraph({
+            text: 'Notes',
+            bold: true,
+            size: 20
+        }));
+        sections.push(new Paragraph(record.notes));
+        sections.push(new Paragraph(''));
+    }
+    
+    // Add attachments
+    if (record.files.length > 0) {
+        sections.push(new Paragraph({
+            text: 'Attachments',
+            bold: true,
+            size: 20
+        }));
+        
+        record.files.forEach(file => {
+            sections.push(new Paragraph(`• ${file.name}`));
+            
+            if (file.type.startsWith('image/')) {
+                try {
+                    sections.push(new Paragraph({
+                        children: [
+                            {
+                                type: 'image',
+                                data: file.data.split(',')[1],
+                                transformation: {
+                                    width: 400,
+                                    height: 300
+                                }
+                            }
+                        ]
+                    }));
+                } catch (e) {
+                    sections.push(new Paragraph('(Image could not be embedded)'));
+                }
+            }
+        });
+    }
+    
+    const doc = new Document({
+        sections: [{
+            children: sections
+        }]
+    });
+    
+    Packer.toBlob(doc).then(blob => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${record.testTitle.replace(/\s+/g, '_')}_${record.testDate}.docx`;
+        link.click();
+    });
+}
+
+// Settings
+function changeTheme() {
+    const theme = document.getElementById('themeSelect').value;
+    localStorage.setItem('theme', theme);
+    // Theme switching logic here
+}
+
+function clearAllData() {
+    if (confirm('This will delete all saved records. Are you sure?')) {
+        localStorage.removeItem('qaRecords');
+        goBack();
+        alert('All data cleared.');
+    }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOMContentLoaded fired');
+    try {
+        initializeApp();
+    } catch (e) {
+        console.error('Fatal error during initialization:', e);
+    }
+});

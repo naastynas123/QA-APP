@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Site QA Assistant</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/docx.min.js"></script> -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <!-- Header -->
+    <header class="app-header"> 
+        <div class="header-left">
+            <img src="rjv-logo.jpg" alt="RJV" class="header-logo">
+            <button class="menu-btn" onclick="window.toggleMenu()">
+                <i class="fas fa-bars"></i>
+            </button>
+            <h1 class="app-title">Site QA Assistant</h1>
+        </div>
+        <div class="header-right">
+            <button class="user-btn" onclick="window.toggleUserMenu()">
+                <i class="fas fa-user-circle"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Sidebar Menu -->
+    <nav id="sideMenu" class="side-menu">
+        <button class="close-menu" onclick="window.toggleMenu()">×</button>
+        <ul>
+            <li><a href="#" onclick="window.goHome(); toggleMenu();">Home</a></li>
+            <li><a href="#" onclick="window.showRecordsPage(); toggleMenu();">My Records</a></li>
+            <li><a href="#" onclick="window.showSettings(); toggleMenu();">Settings</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <!-- Login Page -->
+        <div id="loginPage" class="page active">
+            <div class="auth-container">
+                <div class="auth-card">
+                    <img src="rjv-logo.jpg" alt="RJV" class="login-logo">
+                    <h1>RJV QA System</h1>
+                    <p class="subtitle">Professional Construction QA Documentation</p>
+                    
+                    <div id="authForm">
+                        <h3 id="authTitle">Sign In</h3>
+                        
+                        <div class="form-group">
+                            <label>Email:</label>
+                            <input type="email" id="authEmail" placeholder="Enter your email">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Password:</label>
+                            <input type="password" id="authPassword" placeholder="Enter your password">
+                        </div>
+                        
+                        <button class="btn-primary" onclick="window.handleAuth()" id="authBtn">Sign In</button>
+                        <button class="btn-secondary" onclick="window.toggleAuthMode()" id="toggleAuthBtn">Create Account</button>
+                        
+                        <div id="authError" class="auth-error"></div>
+                    </div>
+                    
+                    <div class="pricing-info">
+                        <h4>Subscription Plans</h4>
+                        <div class="plan">
+                            <strong>Free</strong>
+                            <p>Limited to 5 reports/month</p>
+                        </div>
+                        <div class="plan premium">
+                            <strong>Premium - $29/month</strong>
+                            <p>Unlimited reports + AI analysis</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="landingPage" class="page hidden">
+            <div class="welcome-section">
+                <img src="rjv-logo.jpg" alt="RJV" class="landing-logo">
+                <h2>Welcome to RJV QA System</h2>
+                <p>Select a document type to begin</p>
+            </div>
+            
+            <div class="document-grid">
+                <button class="doc-btn" onclick="window.startForm('retaining-wall')" title="Retaining Wall QA">
+                    <div class="doc-icon">
+                        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Bricks -->
+                            <rect x="15" y="35" width="18" height="15" fill="#d32f2f" stroke="#8b0000" stroke-width="1"/>
+                            <rect x="36" y="35" width="18" height="15" fill="#d32f2f" stroke="#8b0000" stroke-width="1"/>
+                            <rect x="57" y="35" width="18" height="15" fill="#d32f2f" stroke="#8b0000" stroke-width="1"/>
+                            <rect x="25" y="52" width="18" height="15" fill="#c41c1c" stroke="#8b0000" stroke-width="1"/>
+                            <rect x="46" y="52" width="18" height="15" fill="#c41c1c" stroke="#8b0000" stroke-width="1"/>
+                            <rect x="67" y="52" width="18" height="15" fill="#c41c1c" stroke="#8b0000" stroke-width="1"/>
+                            <!-- Foundation -->
+                            <rect x="10" y="70" width="80" height="18" fill="#8d6e63" stroke="#5d4037" stroke-width="1"/>
+                        </svg>
+                    </div>
+                    <span>Retaining Wall QA</span>
+                </button>
+
+                <button class="doc-btn" onclick="window.startForm('peno-tests')" title="Sand Penetrometer Tests">
+                    <div class="doc-icon">
+                        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Handle -->
+                            <circle cx="50" cy="25" r="8" fill="#2196F3"/>
+                            <!-- Shaft -->
+                            <rect x="48" y="33" width="4" height="45" fill="#2196F3"/>
+                            <!-- Cone -->
+                            <polygon points="40,78 60,78 50,92" fill="#ff9800"/>
+                            <!-- Ground -->
+                            <ellipse cx="50" cy="95" rx="25" ry="5" fill="#8d6e63" opacity="0.6"/>
+                        </svg>
+                    </div>
+                    <span>Sand Penetrometer Tests</span>
+                </button>
+
+                <button class="doc-btn" onclick="window.startForm('drainage-records')" title="Drainage Records">
+                    <div class="doc-icon">
+                        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Pipe -->
+                            <rect x="20" y="35" width="60" height="35" rx="5" fill="#0288d1" stroke="#01579b" stroke-width="2"/>
+                            <!-- Inner -->
+                            <rect x="23" y="38" width="54" height="29" rx="4" fill="#03a9f4"/>
+                            <!-- Water flow lines -->
+                            <line x1="30" y1="52" x2="70" y2="52" stroke="#fff" stroke-width="1" opacity="0.6"/>
+                            <line x1="30" y1="60" x2="70" y2="60" stroke="#fff" stroke-width="1" opacity="0.6"/>
+                        </svg>
+                    </div>
+                    <span>Drainage Records</span>
+                </button>
+
+                <button class="doc-btn" onclick="window.startForm('earthworks')" title="Earthworks QA">
+                    <div class="doc-icon">
+                        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Excavator bucket -->
+                            <rect x="25" y="30" width="25" height="20" rx="2" fill="#ff9800"/>
+                            <!-- Excavator arm -->
+                            <rect x="48" y="25" width="8" height="35" fill="#ff9800"/>
+                            <!-- Excavator body -->
+                            <ellipse cx="60" cy="65" rx="15" ry="12" fill="#ffa726"/>
+                            <!-- Ground -->
+                            <polygon points="15,75 85,75 80,90 20,90" fill="#8d6e63"/>
+                        </svg>
+                    </div>
+                    <span>Earthworks QA</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Form Page -->
+        <div id="formPage" class="page hidden">
+            <div class="form-header">
+                <button class="back-btn" onclick="window.goBack()">← Back</button>
+                <h2 id="formTitle"></h2>
+            </div>
+            
+            <div class="form-container">
+                <form id="testForm">
+                    <!-- File Upload Section -->
+                    <div class="form-card">
+                        <h3>Upload Drawing / Site Plan</h3>
+                        <div class="upload-box" onclick="document.getElementById('fileInput').click()">
+                            <div class="upload-icon">
+                                <i class="fas fa-folder-open"></i>
+                            </div>
+                            <p id="uploadPlaceholder">Upload Site Plan, Photos, or Drawing</p>
+                            <p class="upload-hint" id="uploadedFileName">Click to change</p>
+                            <input type="file" id="fileInput" multiple accept="image/*,.pdf" onchange="window.handleFileUpload(event)" style="display:none;">
+                        </div>
+                        <div id="fileList" class="file-list"></div>
+                        <div class="form-group" style="margin-top: 16px;">
+                            <label for="testInterval"><strong>How often is testing needed? (metres)</strong>:</label>
+                            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                                <input type="number" id="testInterval" placeholder="e.g., 5" min="1" step="0.1" value="5" style="max-width:120px;">
+                                <button type="button" class="btn-primary" onclick="window.applyInterval()">Apply interval</button>
+                            </div>
+                        </div>
+                        <!-- Image Analysis Section -->
+                        <div id="analysisSection" class="analysis-section hidden">
+                            <h4>Image Analysis</h4>
+                            <div id="drawingPreview" class="drawing-preview">
+                                <canvas id="drawingCanvas"></canvas>
+                            </div>
+                            <div id="analysisResults" class="analysis-results"></div>
+                        </div>
+                    </div>
+
+                    <!-- Auto-Detected Information -->
+                    <!-- REMOVED: Box was not showing useful information -->
+
+
+                    <!-- General Information -->
+                    <div class="form-card">
+                        <h3>General Information</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Inspector Name:</label>
+                                <input type="text" id="inspectorName" placeholder="Enter inspector name" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Test Date:</label>
+                                <input type="date" id="testDate" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Site Location:</label>
+                            <input type="text" id="siteLocation" placeholder="Enter site location" required>
+                        </div>
+                    </div>
+
+                    <!-- Type-Specific Fields -->
+                    <!-- REMOVED: Not important for current workflow -->
+
+
+                    <!-- Test Results Table -->
+                    <div class="form-card">
+                        <h3 id="tableTitle">Test Results</h3>
+                        <div class="table-wrapper">
+                            <table id="resultsTable" class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Test Location</th>
+                                        <th>Density (%)</th>
+                                        <th>Moisture (%)</th>
+                                        <th>Notes</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tableBody">
+                                </tbody>
+                            </table>
+                        </div>
+                        <button type="button" class="add-test-btn" onclick="window.addTableRow()">+ Add Test</button>
+                    </div>
+
+                    <!-- Photos / Notes -->
+                    <div class="form-card">
+                        <h3>Photos / Notes</h3>
+                        <button type="button" class="add-photo-btn" onclick="document.getElementById('photoInput').click()">
+                            <i class="fas fa-camera"></i> Add Photo
+                        </button>
+                        <input type="file" id="photoInput" accept="image/*" onchange="window.handlePhotoUpload(event)" style="display:none;">
+                        <textarea id="notes" placeholder="Add Notes..." rows="4"></textarea>
+                    </div>
+
+                    <!-- Submit Buttons -->
+                    <div class="form-actions">
+                        <button type="button" class="btn-secondary" onclick="window.goBack()">Cancel</button>
+                        <button type="button" class="btn-primary" onclick="window.saveRecord()">Save Report</button>
+                        <button type="button" class="btn-primary" onclick="window.submitAndExport()">Submit & Export</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Records Page -->
+        <div id="recordsPage" class="page hidden">
+            <div class="records-header">
+                <button class="back-btn" onclick="window.goBack()">← Back</button>
+                <h2>My Records</h2>
+            </div>
+            <div id="recordsList" class="records-list"></div>
+        </div>
+
+        <!-- Settings Page -->
+        <div id="settingsPage" class="page hidden">
+            <div class="settings-header">
+                <button class="back-btn" onclick="window.goBack()">← Back</button>
+                <h2>Settings</h2>
+            </div>
+            <div class="settings-container">
+                <div class="setting-item">
+                    <label>Theme:</label>
+                    <select id="themeSelect" onchange="changeTheme()">
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <button class="danger-btn" onclick="clearAllData()">Clear All Data</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Menu -->
+    <div id="userMenu" class="user-menu hidden">
+        <a href="#" onclick="showUserProfile(); toggleUserMenu();">Profile</a>
+        <a href="#" onclick="showSubscription(); toggleUserMenu();">Subscription</a>
+        <a href="#" onclick="window.showSettings(); toggleUserMenu();">Settings</a>
+        <hr>
+        <a href="#" class="logout" onclick="handleLogout(); toggleUserMenu();">Logout</a>
+    </div>
+
+    <!-- User Profile Modal -->
+    <div id="profileModal" class="modal hidden">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal('profileModal')">×</button>
+            <h2>User Profile</h2>
+            <div id="profileInfo" class="profile-info">
+                <p><strong>Email:</strong> <span id="profileEmail"></span></p>
+                <p><strong>Plan:</strong> <span id="profilePlan"></span></p>
+                <p><strong>Reports Created:</strong> <span id="profileReports"></span></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subscription Modal -->
+    <div id="subscriptionModal" class="modal hidden">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal('subscriptionModal')">×</button>
+            <h2>Subscription Management</h2>
+            <div class="subscription-plans">
+                <div class="plan-card">
+                    <h3>Free Plan</h3>
+                    <p class="price">$0/month</p>
+                    <ul>
+                        <li>✓ 5 reports/month</li>
+                        <li>✓ Basic features</li>
+                        <li>✗ AI analysis</li>
+                    </ul>
+                    <button class="btn-secondary" id="freeBtn" onclick="setSubscription('free')">Current Plan</button>
+                </div>
+                
+                <div class="plan-card premium">
+                    <h3>Premium Plan</h3>
+                    <p class="price">$29/month</p>
+                    <ul>
+                        <li>✓ Unlimited reports</li>
+                        <li>✓ AI analysis</li>
+                        <li>✓ Priority support</li>
+                    </ul>
+                    <button class="btn-primary" id="premiumBtn" onclick="upgradeToPremium()">Upgrade Now</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Supabase client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.3/dist/umd/supabase.min.js"></script>
+    <script src="config.js"></script>
+    <!-- PDF.js for PDF rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js"></script>
+    <!-- OpenCV.js for image processing -->
+    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+    <!-- Tesseract.js for OCR (scale detection) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.1/dist/tesseract.min.js"></script>
+    <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+    <script src="app.js"></script>
+    <script>
+        // Verify critical functions are loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Checking if functions are available...');
+            console.log('window.handleAuth:', typeof window.handleAuth);
+            console.log('window.toggleAuthMode:', typeof window.toggleAuthMode);
+            console.log('window.toggleMenu:', typeof window.toggleMenu);
+            console.log('window.goHome:', typeof window.goHome);
+            console.log('window.goBack:', typeof window.goBack);
+        });
+    </script>

@@ -1,0 +1,1253 @@
+
+console.log('[app.js] Script loaded');
+
+window.showPage = function(pageId) {
+    try {
+        console.log('[showPage] Switching to page:', pageId);
+        document.querySelectorAll('.page').forEach(p => {
+            p.classList.add('hidden');
+            p.classList.remove('active');
+        });
+        const page = document.getElementById(pageId);
+        if (page) {
+            page.classList.remove('hidden');
+            page.classList.add('active');
+        } else {
+            console.warn('[showPage] No element found for id:', pageId);
+        }
+        // Debug: print class lists for loginPage and landingPage
+        const loginPage = document.getElementById('loginPage');
+        const landingPage = document.getElementById('landingPage');
+        if (loginPage) console.log('[showPage] loginPage classes:', loginPage.className);
+        if (landingPage) console.log('[showPage] landingPage classes:', landingPage.className);
+    } catch (e) {
+        console.error('Error showing page:', pageId, e);
+    }
+};
+
+window.toggleMenu = function() {
+    const menu = document.getElementById('sideMenu');
+    if (menu) menu.classList.toggle('active');
+};
+
+// Stub functions for missing features
+window.showRecordsPage = function() {
+    console.log('showRecordsPage not yet implemented');
+    alert('Records page coming soon!');
+};
+
+// Analyze drawing: now auto-invoked on upload; kept as a helper if needed elsewhere
+window.analyzeDrawing = function() {
+    if (currentImage && typeof window.autoDetectAndLabel === 'function') {
+        window.autoDetectAndLabel(currentImage);
+    }
+};
+
+window.saveRecord = function() {
+    console.log('saveRecord not yet implemented');
+    alert('Save record coming soon!');
+};
+
+window.submitAndExport = function() {
+    console.log('submitAndExport not yet implemented');
+    alert('Export coming soon!');
+};
+
+// --- BEGIN GLOBAL STATE (move to top for hoisting) ---
+let currentTestType = null;
+let uploadedFiles = [];
+let currentImage = null;
+let cocoModel = null;
+let currentUser = null;
+let userSubscription = null;
+window.authMode = 'signin';
+// --- END GLOBAL STATE ---
+// --- BEGIN startForm RESTORE ---
+// Test type configuration (from backup)
+const testConfigs = {
+    'retaining-wall': {
+        title: 'Retaining Wall QA',
+        fields: [
+            { label: 'Wall Height (m)', id: 'wallHeight', type: 'number' },
+            { label: 'Wall Type', id: 'wallType', type: 'text', placeholder: 'e.g., Concrete, Brick' },
+            { label: 'Materials', id: 'materials', type: 'text' },
+            { label: 'Stability Assessment', id: 'stabilityAssessment', type: 'text', placeholder: 'e.g., Good, Fair, Poor' }
+        ]
+    },
+    'peno-tests': {
+        title: 'Sand Penetrometer Tests',
+        fields: [
+            { label: 'Peno Reading', id: 'penoReading', type: 'number' },
+            { label: 'Test Depth (m)', id: 'depth', type: 'number' },
+            { label: 'Protocol', id: 'protocol', type: 'text', placeholder: 'e.g., Standard Penetrometer' },
+            { label: 'Lab Results', id: 'labResults', type: 'text' }
+        ]
+    },
+    'drainage-records': {
+        title: 'Drainage Records',
+        fields: [
+            { label: 'Pipe Size (mm)', id: 'pipeSize', type: 'number' },
+            { label: 'Flow Rate (L/s)', id: 'flowRate', type: 'number' },
+            { label: 'Condition', id: 'condition', type: 'text', placeholder: 'e.g., Clean, Partially Blocked' },
+            { label: 'Inspection Notes', id: 'inspectionNotes', type: 'text' }
+        ]
+    },
+    'earthworks': {
+        title: 'Earthworks QA',
+        fields: [
+            { label: 'Cut Quantity (m³)', id: 'cutQty', type: 'number' },
+            { label: 'Fill Quantity (m³)', id: 'fillQty', type: 'number' },
+            { label: 'Compaction Test Result', id: 'compactionTest', type: 'text' },
+            { label: 'Moisture Content (%)', id: 'moistureContent', type: 'number' }
+        ]
+    }
+};
+
+window.startForm = function(testType) {
+    currentTestType = testType;
+    uploadedFiles = [];
+    const config = testConfigs[testType];
+    document.getElementById('formTitle').textContent = config.title;
+
+    // Clear form
+    const testForm = document.getElementById('testForm');
+    if (testForm) testForm.reset();
+    const fileList = document.getElementById('fileList');
+    if (fileList) fileList.innerHTML = '';
+    const detectedInfo = document.getElementById('detectedInfo');
+    if (detectedInfo) detectedInfo.innerHTML = '<p>Upload a drawing to auto-detect information...</p>';
+    const testDate = document.getElementById('testDate');
+    if (testDate) testDate.value = new Date().toISOString().split('T')[0];
+    const uploadedFileName = document.getElementById('uploadedFileName');
+    if (uploadedFileName) uploadedFileName.textContent = 'Click to change';
+
+    // Clear table
+    const tableBody = document.getElementById('tableBody');
+    if (tableBody) tableBody.innerHTML = '';
+    if (typeof window.addTableRow === 'function') window.addTableRow(); // Add first empty row
+
+    // Generate type-specific fields
+    const fieldsContainer = document.getElementById('typeSpecificFields');
+    if (fieldsContainer) {
+        fieldsContainer.innerHTML = '<h3>Test-Specific Fields</h3>';
+        config.fields.forEach(field => {
+            const div = document.createElement('div');
+            div.className = 'form-group';
+            div.innerHTML = `
+                <label>${field.label}:</label>
+                <input type="${field.type}" id="${field.id}" placeholder="${field.placeholder || ''}" required>
+            `;
+            fieldsContainer.appendChild(div);
+        });
+    }
+
+    // Show form page
+    window.showPage('formPage');
+};
+// --- END startForm RESTORE ---
+
+// Ensure Supabase is ready before any auth calls
+document.addEventListener('DOMContentLoaded', async () => {
+    // Wait for Supabase client to be ready
+    let attempts = 0;
+    while (!window.supabaseClient && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+    }
+    if (!window.supabaseClient) {
+        alert('Supabase client failed to initialize. Please refresh the page.');
+        return;
+    }
+    initializeApp();
+});
+// --- AUTHENTICATION LOGIC RESTORED FROM BACKUP ---
+// Initialize
+function initializeApp() {
+    console.log('initializeApp starting...');
+    try {
+        // Set test date if form exists
+        const testDateEl = document.getElementById('testDate');
+        if (testDateEl) {
+            const today = new Date().toISOString().split('T')[0];
+            testDateEl.value = today;
+        }
+    } catch (e) {
+        console.warn('Could not set test date:', e);
+    }
+    try {
+        // Check auth status
+        checkAuthStatus();
+    } catch (e) {
+        console.error('Error checking auth status:', e);
+        window.showPage('loginPage');
+    }
+    try {
+        // Load AI model
+        if (typeof loadCocoModel === 'function') loadCocoModel();
+    } catch (e) {
+        console.warn('Could not load AI model:', e);
+    }
+    console.log('initializeApp complete');
+}
+
+async function checkAuthStatus() {
+    try {
+        const { data: { session } } = await window.supabaseClient.auth.getSession();
+        if (session) {
+            currentUser = session.user;
+            console.log('User logged in:', currentUser.email);
+            window.showPage('landingPage');
+        } else {
+            console.log('No session found');
+            window.showPage('loginPage');
+        }
+    } catch (e) {
+        console.error('Auth check error:', e);
+        window.showPage('loginPage');
+    }
+}
+
+window.toggleAuthMode = function() {
+    try {
+        window.authMode = window.authMode === 'signin' ? 'signup' : 'signin';
+        const authTitle = document.getElementById('authTitle');
+        const authBtn = document.getElementById('authBtn');
+        const toggleAuthBtn = document.getElementById('toggleAuthBtn');
+        if (authTitle) authTitle.textContent = window.authMode === 'signin' ? 'Sign In' : 'Create Account';
+        if (authBtn) authBtn.textContent = window.authMode === 'signin' ? 'Sign In' : 'Create Account';
+        if (toggleAuthBtn) toggleAuthBtn.textContent = window.authMode === 'signin' ? 'Create Account' : 'Back to Sign In';
+        const authError = document.getElementById('authError');
+        if (authError) authError.innerHTML = '';
+    } catch (e) {
+        console.error('Error in toggleAuthMode:', e);
+    }
+};
+
+window.handleAuth = async function() {
+    try {
+        console.log('[handleAuth] Starting authentication...');
+        
+        // Check if Supabase client is ready
+        if (!window.supabaseClient) {
+            console.log('[handleAuth] Supabase client not ready, waiting...');
+            const errorDiv = document.getElementById('authError');
+            if (errorDiv) errorDiv.textContent = 'Initializing... please try again';
+            return;
+        }
+        
+        const emailEl = document.getElementById('authEmail');
+        const passwordEl = document.getElementById('authPassword');
+        const errorDiv = document.getElementById('authError');
+        if (!emailEl || !passwordEl || !errorDiv) {
+            console.error('Form elements not found');
+            return;
+        }
+        const email = emailEl.value.trim().toLowerCase();
+        const password = passwordEl.value.trim();
+        if (!email || !password) {
+            errorDiv.textContent = 'Please enter email and password';
+            return;
+        }
+        if (password.length < 6) {
+            errorDiv.textContent = 'Password must be at least 6 characters';
+            return;
+        }
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            errorDiv.textContent = 'Please enter a valid email address';
+            return;
+        }
+        if (window.authMode === 'signup') {
+            console.log('[handleAuth] Signing up...');
+            const { data, error } = await window.supabaseClient.auth.signUp({ email, password });
+            console.log('[handleAuth] Signup response:', { data, error });
+            if (error) {
+                errorDiv.textContent = error.message || 'Signup failed';
+            } else {
+                errorDiv.textContent = 'Account created! Now try signing in.';
+                window.authMode = 'signin';
+                const authTitle = document.getElementById('authTitle');
+                const authBtn = document.getElementById('authBtn');
+                const toggleBtn = document.getElementById('toggleAuthBtn');
+                if (authTitle) authTitle.textContent = 'Sign In';
+                if (authBtn) authBtn.textContent = 'Sign In';
+                if (toggleBtn) toggleBtn.textContent = 'Create Account';
+                passwordEl.value = '';
+            }
+        } else {
+            console.log('[handleAuth] Signing in...');
+            const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
+            console.log('[handleAuth] Signin response:', { data, error });
+            if (error) {
+                errorDiv.textContent = error.message || 'Sign in failed';
+            } else {
+                if (data && data.user) {
+                    currentUser = data.user;
+                    console.log('[handleAuth] User logged in:', currentUser.email);
+                    window.showPage('landingPage');
+                } else if (data && data.session) {
+                    currentUser = data.session.user;
+                    console.log('[handleAuth] User logged in via session:', currentUser.email);
+                    window.showPage('landingPage');
+                } else {
+                    errorDiv.textContent = 'Sign in successful but user data not found';
+                    console.error('[handleAuth] No user data in response:', data);
+                }
+                emailEl.value = '';
+                passwordEl.value = '';
+            }
+        }
+    } catch (e) {
+        console.error('Auth error:', e);
+        const errorDiv = document.getElementById('authError');
+        if (errorDiv) errorDiv.textContent = e.message || 'Authentication failed';
+    }
+};
+
+window.handleLogout = function() {
+    try {
+        if (window.supabaseClient) {
+            window.supabaseClient.auth.signOut();
+        }
+        currentUser = null;
+        userSubscription = null;
+        const emailEl = document.getElementById('authEmail');
+        const passEl = document.getElementById('authPassword');
+        if (emailEl) emailEl.value = '';
+        if (passEl) passEl.value = '';
+        window.showPage('loginPage');
+    } catch (e) {
+        console.error('Logout error:', e);
+    }
+};
+
+window.toggleUserMenu = function() {
+    const menu = document.getElementById('userMenu');
+    if (menu) {
+        menu.classList.toggle('active');
+        menu.classList.toggle('hidden');
+    }
+};
+
+window.goHome = function() {
+    currentTestType = null;
+    uploadedFiles = [];
+    window.showPage('landingPage');
+};
+
+window.goBack = function() {
+    window.goHome();
+};
+
+window.showUserProfile = function() {
+    const profileEmail = document.getElementById('profileEmail');
+    const profilePlan = document.getElementById('profilePlan');
+    const profileReports = document.getElementById('profileReports');
+    const profileModal = document.getElementById('profileModal');
+    
+    if (profileEmail) profileEmail.textContent = currentUser?.email || 'N/A';
+    if (profilePlan) profilePlan.textContent = userSubscription === 'premium' ? 'Premium' : 'Free';
+    if (profileReports) profileReports.textContent = '0';
+    if (profileModal) profileModal.classList.remove('hidden');
+};
+
+window.showSubscription = function() {
+    const freeBtn = document.getElementById('freeBtn');
+    const premiumBtn = document.getElementById('premiumBtn');
+    
+    if (userSubscription === 'free') {
+        if (freeBtn) {
+            freeBtn.textContent = 'Current Plan';
+            freeBtn.disabled = true;
+        }
+        if (premiumBtn) {
+            premiumBtn.textContent = 'Upgrade Now';
+            premiumBtn.disabled = false;
+        }
+    } else {
+        if (freeBtn) {
+            freeBtn.textContent = 'Downgrade';
+            freeBtn.disabled = false;
+        }
+        if (premiumBtn) {
+            premiumBtn.textContent = 'Current Plan';
+            premiumBtn.disabled = true;
+        }
+    }
+    
+    const subscriptionModal = document.getElementById('subscriptionModal');
+    if (subscriptionModal) subscriptionModal.classList.remove('hidden');
+}
+
+window.setSubscription = async function(plan) {
+    try {
+        if (window.supabaseClient) {
+            await window.supabaseClient.from('user_profiles').update({
+                subscription_plan: plan
+            }).eq('id', currentUser.id);
+        }
+        
+        userSubscription = plan;
+        window.closeModal('subscriptionModal');
+        alert('Subscription updated!');
+        checkFeatureAccess();
+    } catch (e) {
+        console.error('Subscription error:', e);
+        alert('Failed to update subscription');
+    }
+};
+
+window.upgradeToPremium = function() {
+    alert('Premium upgrades coming soon! Contact support for access.');
+};
+
+window.closeModal = function(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) modal.classList.add('hidden');
+};
+
+window.showSettings = function() {
+    window.showPage('settingsPage');
+};
+
+function checkFeatureAccess() {
+    const analysisBtn = document.querySelector('.analyze-btn');
+    if (analysisBtn) {
+        if (userSubscription !== 'premium') {
+            analysisBtn.disabled = true;
+        } else {
+            analysisBtn.disabled = false;
+        }
+    }
+}
+
+// Assign to window for inline HTML usage - MOVED TO END OF FILE
+// --- END AUTHENTICATION LOGIC RESTORE ---
+
+
+// Attempt to OCR the image to extract a scale like "1:500" and return denominator
+async function detectScaleFromImage(dataUrl) {
+    if (!window.Tesseract || !window.Tesseract.recognize) return null;
+    try {
+        const { data } = await window.Tesseract.recognize(dataUrl, 'eng', { logger: () => {} });
+        const text = (data && data.text ? data.text : '').toLowerCase();
+        const scaleMatch = text.match(/1\s*[:=]\s*(\d{2,6})/);
+        if (scaleMatch) {
+            const denom = parseInt(scaleMatch[1], 10);
+            if (!isNaN(denom) && denom > 0) return denom;
+        }
+    } catch (e) {
+        console.warn('Scale OCR failed:', e);
+    }
+    return null;
+}
+
+// Extract all dimension numbers from the drawing (e.g., "2670", "3560" for wall lengths in mm)
+// Returns dimensions in the order they appear (left-to-right, top-to-bottom roughly)
+async function extractDimensionsFromImage(dataUrl) {
+    if (!window.Tesseract || !window.Tesseract.recognize) return [];
+    try {
+        const { data } = await window.Tesseract.recognize(dataUrl, 'eng', { logger: () => {} });
+        const text = (data && data.text ? data.text : '');
+        console.log('OCR Text extracted:', text.substring(0, 500));  // Debug: show first 500 chars
+        
+        // Find all numbers that look like dimensions (3-5 digits, likely in mm)
+        // Keep them in order of appearance for better wall matching
+        const matches = text.match(/\b(\d{3,5})\b/g) || [];
+        const dimensions = matches.map(m => parseInt(m, 10)).filter(n => n > 500 && n < 9999);
+        
+        console.log('Raw OCR matches:', matches);
+        console.log('Filtered dimensions (500-9999mm):', dimensions);
+        
+        // Remove duplicates but keep order
+        const seen = new Set();
+        const unique = dimensions.filter(d => {
+            if (seen.has(d)) return false;
+            seen.add(d);
+            return true;
+        }).sort((a, b) => b - a); // Sort descending (largest first = longest walls first)
+        
+        console.log('Final unique dimensions (sorted descending):', unique);
+        return unique;
+    } catch (e) {
+        console.warn('Dimension OCR failed:', e);
+    }
+    return [];
+}
+
+async function computePixelsPerMeter(canvas, dataUrl) {
+    // Default to 1:500 if nothing detected
+    let scaleDenominator = 500;
+    const detected = await detectScaleFromImage(dataUrl);
+    if (detected) scaleDenominator = detected;
+    // Heuristic: assume canvas width represents scaleDenominator meters
+    // px per meter = canvas.width / scaleDenominator
+    const pxPerMeter = Math.max(1, canvas.width / scaleDenominator);
+    return pxPerMeter;
+}
+
+// Auto pipeline to draw image, read dimensions, and label walls
+window.autoDetectAndLabel = async function(dataUrl) {
+    const canvas = document.getElementById('drawingCanvas');
+    if (!canvas) return;
+    const intervalInput = document.getElementById('testInterval');
+    const intervalMeters = intervalInput && !isNaN(intervalInput.value) && intervalInput.value > 0
+        ? parseFloat(intervalInput.value)
+        : 5;
+    
+    // Extract actual dimensions from the drawing (primary source)
+    const dimensions = await extractDimensionsFromImage(dataUrl);
+    console.log('Extracted dimensions (mm):', dimensions);
+    
+    if (typeof detectWallsAndAnnotate === 'function') {
+        detectWallsAndAnnotate(canvas, { intervalMeters, dimensions });
+    }
+};
+
+// Use OpenCV.js to detect straight lines (walls) and place labels based on actual dimensions
+function detectWallsAndAnnotate(canvas, options = {}) {
+    if (!window.cv) {
+        alert('OpenCV.js not loaded.');
+        return;
+    }
+    const intervalMeters = options.intervalMeters || 5;
+    const dimensions = options.dimensions || [];
+    
+    console.log('Detected dimensions:', dimensions, 'Interval:', intervalMeters);
+    
+    const context = canvas.getContext('2d');
+    const src = cv.imread(canvas);
+    let dst = new cv.Mat();
+    let lines = new cv.Mat();
+    
+    // Convert to grayscale
+    cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY, 0);
+    // Apply morphological operations to enhance continuous lines and suppress noise
+    let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2));
+    cv.morphologyEx(dst, dst, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 1);
+    kernel.delete();
+    
+    // Edge detection - moderate sensitivity to catch all walls
+    cv.Canny(dst, dst, 48, 135, 3, false);
+    // Hough line transform - balanced to catch all walls
+    cv.HoughLinesP(dst, lines, 1, Math.PI / 180, 82, 48, 11);
+    
+    // --- Merge collinear and connected lines ---
+    const minLineLength = canvas.width / 18;  // 5.5% threshold - catches all walls but not noise
+    const angleThreshold = 0.08;  // Stricter angle - don't merge unless truly collinear
+    const distThreshold = 15;  // Much lower - only merge adjacent segments, not walls with gaps
+    let mergedLines = [];
+    let used = new Array(lines.rows).fill(false);
+    
+    for (let i = 0; i < lines.rows; ++i) {
+        if (used[i]) continue;
+        let [x1, y1, x2, y2] = lines.data32S.slice(i * 4, i * 4 + 4);
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let lengthPx = Math.sqrt(dx * dx + dy * dy);
+        if (lengthPx < minLineLength) continue;
+        
+        let group = [{x1, y1, x2, y2}];
+        used[i] = true;
+        let angle1 = Math.atan2(dy, dx);
+        
+        for (let j = 0; j < lines.rows; ++j) {
+            if (i === j || used[j]) continue;
+            let [xx1, yy1, xx2, yy2] = lines.data32S.slice(j * 4, j * 4 + 4);
+            let ddx = xx2 - xx1;
+            let ddy = yy2 - yy1;
+            let angle2 = Math.atan2(ddy, ddx);
+            
+            if (Math.abs(angle1 - angle2) < angleThreshold || Math.abs(Math.abs(angle1 - angle2) - Math.PI) < angleThreshold) {
+                let distA = Math.hypot(x1 - xx1, y1 - yy1);
+                let distB = Math.hypot(x2 - xx2, y2 - yy2);
+                let distC = Math.hypot(x1 - xx2, y1 - yy2);
+                let distD = Math.hypot(x2 - xx1, y2 - yy1);
+                if (distA < distThreshold || distB < distThreshold || distC < distThreshold || distD < distThreshold) {
+                    group.push({x1: xx1, y1: yy1, x2: xx2, y2: yy2});
+                    used[j] = true;
+                }
+            }
+        }
+        
+        let allPoints = [];
+        group.forEach(l => { allPoints.push([l.x1, l.y1]); allPoints.push([l.x2, l.y2]); });
+        let maxDist = 0, p1 = allPoints[0], p2 = allPoints[1];
+        for (let m = 0; m < allPoints.length; ++m) {
+            for (let n = m + 1; n < allPoints.length; ++n) {
+                let d = Math.hypot(allPoints[m][0] - allPoints[n][0], allPoints[m][1] - allPoints[n][1]);
+                if (d > maxDist) { maxDist = d; p1 = allPoints[m]; p2 = allPoints[n]; }
+            }
+        }
+        mergedLines.push({x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1]});
+    }
+    
+    // --- Post-process: Merge parallel walls that are very close together (double walls) ---
+    let finalWalls = [];
+    let mergedIndices = new Set();
+    
+    for (let i = 0; i < mergedLines.length; i++) {
+        if (mergedIndices.has(i)) continue;
+        
+        let wall = {...mergedLines[i]};
+        mergedIndices.add(i);
+        
+        // Try to merge with nearby parallel walls (only for true double walls, very close)
+        for (let j = i + 1; j < mergedLines.length; j++) {
+            if (mergedIndices.has(j)) continue;
+            
+            let other = mergedLines[j];
+            const dx1 = wall.x2 - wall.x1;
+            const dy1 = wall.y2 - wall.y1;
+            const dx2 = other.x2 - other.x1;
+            const dy2 = other.y2 - other.y1;
+            
+            // Check if parallel (same angle within threshold)
+            const angle1 = Math.atan2(dy1, dx1);
+            const angle2 = Math.atan2(dy2, dx2);
+            const angleThreshold = 0.08;
+            
+            if (Math.abs(angle1 - angle2) < angleThreshold || Math.abs(Math.abs(angle1 - angle2) - Math.PI) < angleThreshold) {
+                // Check distance between walls (perpendicular distance)
+                const perpDist = Math.abs((wall.x1 - other.x1) * dy1 - (wall.y1 - other.y1) * dx1) / Math.sqrt(dx1*dx1 + dy1*dy1);
+                
+                if (perpDist < 35) {  // Only merge if VERY close (true double walls)
+                    // Take the longer one
+                    const len1 = Math.sqrt(dx1*dx1 + dy1*dy1);
+                    const len2 = Math.sqrt(dx2*dx2 + dy2*dy2);
+                    if (len2 > len1) {
+                        wall = {...other};
+                    }
+                    mergedIndices.add(j);
+                }
+            }
+        }
+        
+        finalWalls.push(wall);
+    }
+    
+    mergedLines = finalWalls;
+    console.log('After merging double walls:', mergedLines.length, 'walls remain');
+    
+    // Filter and sort walls
+    // For subdivision plans: filter out the outer frame and keep internal walls
+    const frameThreshold = 20;  // Pixels from edge - ignore frame boundary
+    mergedLines = mergedLines
+        .map(l => ({...l, length: Math.sqrt((l.x2-l.x1)**2 + (l.y2-l.y1)**2)}))
+        .filter(l => {
+            // Exclude outer frame (lines very close to canvas edges)
+            const minDist = Math.min(l.x1, l.x2, l.y1, l.y2, canvas.width - l.x1, canvas.width - l.x2, canvas.height - l.y1, canvas.height - l.y2);
+            if (minDist < frameThreshold) {
+                console.log('Filtered out frame line at distance:', minDist);
+                return false;
+            }
+            
+            const dx = l.x2 - l.x1, dy = l.y2 - l.y1;
+            const angle = Math.abs(Math.atan2(dy, dx));
+            const isHorizontal = angle < 0.2 || angle > Math.PI - 0.2;
+            const isVertical = Math.abs(angle - Math.PI/2) < 0.2;
+            return (isHorizontal || isVertical) && l.length >= canvas.width / 28;  // 3.6% to catch all walls including 3510, 2910, 2390
+        })
+        .sort((a, b) => {
+            // Spatial ordering: divide canvas into regions and label sequentially
+            // This ensures engineers test geographically close locations in sequence
+            const regionSize = Math.max(canvas.width, canvas.height) / 4;
+            const getRegion = (wall) => {
+                const centerX = (wall.x1 + wall.x2) / 2;
+                const centerY = (wall.y1 + wall.y2) / 2;
+                const regionX = Math.floor(centerX / regionSize);
+                const regionY = Math.floor(centerY / regionSize);
+                return regionY * 4 + regionX;  // Linear region ID
+            };
+            const regionA = getRegion(a);
+            const regionB = getRegion(b);
+            if (regionA !== regionB) return regionA - regionB;
+            // Within same region, sort by position
+            const centerAY = (a.y1 + a.y2) / 2;
+            const centerBY = (b.y1 + b.y2) / 2;
+            if (Math.abs(centerAY - centerBY) > 20) return centerAY - centerBY;
+            const centerAX = (a.x1 + a.x2) / 2;
+            const centerBX = (b.x1 + b.x2) / 2;
+            return centerAX - centerBX;
+        });
+    
+    console.log('Detected', mergedLines.length, 'walls');
+    
+    // Assign dimensions to walls intelligently
+    // Sort dimensions descending, assign to longest walls first
+    let sortedByLength = [...mergedLines].sort((a, b) => b.length - a.length);
+    let dimensionAssignments = new Map();
+    
+    console.log('Available dimensions:', dimensions, 'Number of walls:', mergedLines.length);
+    
+    // Strategy: assign each extracted dimension to one wall, starting with longest walls
+    for (let i = 0; i < dimensions.length && i < sortedByLength.length; i++) {
+        dimensionAssignments.set(sortedByLength[i], dimensions[i]);
+    }
+    
+    // If we have fewer dimensions than walls, try to extrapolate from ratio
+    // E.g., if we have 5 dimensions for 15 walls, estimate dimensions for remaining walls
+    if (dimensions.length > 0 && dimensions.length < mergedLines.length) {
+        const avgDimension = dimensions.reduce((a, b) => a + b, 0) / dimensions.length;
+        console.log('Average extracted dimension:', avgDimension, 'mm');
+        
+        for (let i = dimensions.length; i < sortedByLength.length; i++) {
+            const wall = sortedByLength[i];
+            // Estimate based on pixel ratio to first wall
+            const firstWallPixels = sortedByLength[0].length;
+            const thisWallPixels = wall.length;
+            const firstWallDim = dimensionAssignments.get(sortedByLength[0]) || avgDimension;
+            const estimatedDim = (thisWallPixels / firstWallPixels) * firstWallDim;
+            
+            // Only assign if it's reasonable (between 500-9999 mm)
+            if (estimatedDim > 500 && estimatedDim < 9999) {
+                dimensionAssignments.set(wall, Math.round(estimatedDim));
+            }
+        }
+    }
+    
+    // Apply assignments back
+    for (let wall of mergedLines) {
+        if (dimensionAssignments.has(wall)) {
+            wall.assignedDimension = dimensionAssignments.get(wall);
+        }
+    }
+    
+    console.log('Assigned', dimensionAssignments.size, 'dimensions to', mergedLines.length, 'walls');
+    
+    // Label all walls
+    let labelCount = 1;
+    const maxLabels = 100;
+    let totalLabelsPlaced = 0;
+    
+    for (let k = 0; k < mergedLines.length && labelCount <= maxLabels; ++k) {
+        let {x1, y1, x2, y2, length, assignedDimension} = mergedLines[k];
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        
+        // Use assigned dimension in meters (convert from mm), fallback to pixel-based estimate
+        let wallLengthMeters = 0;
+        let hasRealDimension = false;
+        if (assignedDimension) {
+            wallLengthMeters = assignedDimension / 1000;  // mm to meters
+            hasRealDimension = true;
+        } else {
+            // Fallback: estimate from pixel length assuming 1:500 scale
+            // Assume canvas.width represents ~500m, so pixels per meter = canvas.width / 500
+            const estimatedPixelsPerMeter = canvas.width / 500;
+            wallLengthMeters = length / estimatedPixelsPerMeter;
+        }
+        
+        // Calculate number of labels based on wall length and user interval
+        // Formula: ceiling of (wall length / interval) = number of test locations
+        // For walls over intervalMeters (5m default), ensure at least 2 labels
+        let numLabels = 0;
+        if (hasRealDimension) {
+            // Real dimension: use ceiling division to round up
+            numLabels = Math.ceil(wallLengthMeters / intervalMeters);
+            // Ensure walls over interval size get at least 2 labels
+            if (wallLengthMeters > intervalMeters && numLabels < 2) {
+                numLabels = 2;
+            }
+            // Add minimum spacing constraint: labels need at least 15px apart
+            const labelSpacing = length / (numLabels + 1);
+            if (labelSpacing < 15 && numLabels > 1) {
+                numLabels = Math.max(1, Math.floor(length / 20));  // Adjust to ensure spacing
+            }
+        } else {
+            // Estimated wall: use ceiling division
+            numLabels = Math.ceil(wallLengthMeters / intervalMeters);
+            // Ensure walls over interval size get at least 2 labels
+            if (wallLengthMeters > intervalMeters && numLabels < 2) {
+                numLabels = 2;
+            }
+            // Add minimum spacing constraint
+            const labelSpacing = length / (numLabels + 1);
+            if (labelSpacing < 15 && numLabels > 1) {
+                numLabels = Math.max(1, Math.floor(length / 20));
+            }
+        }
+        numLabels = Math.min(3, Math.max(1, numLabels));  // Cap at 3, min 1
+        
+        console.log(`Wall ${k}: Length=${length.toFixed(0)}px, Estimated=${wallLengthMeters.toFixed(2)}m, Labels=${numLabels}`);
+        
+        // Draw red line on the detected wall for visualization
+        context.beginPath();
+        context.moveTo(x1, y1);
+        context.lineTo(x2, y2);
+        context.strokeStyle = 'red';
+        context.lineWidth = 3;
+        context.stroke();
+        
+        // Place labels evenly along the wall
+        for (let n = 0; n < numLabels && labelCount <= maxLabels; n++) {
+            // Space labels evenly: for numLabels, place at 1/(numLabels+1), 2/(numLabels+1), etc.
+            const frac = (n + 1) / (numLabels + 1);
+            const lx = x1 + frac * dx;
+            const ly = y1 + frac * dy;
+            
+            // Draw yellow circle with black border
+            context.beginPath();
+            context.arc(lx, ly, 10, 0, 2 * Math.PI);
+            context.fillStyle = 'yellow';
+            context.fill();
+            context.strokeStyle = 'black';
+            context.lineWidth = 2;
+            context.stroke();
+            
+            // Draw label number
+            context.fillStyle = 'black';
+            context.font = 'bold 14px Arial';
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.fillText(labelCount, lx, ly);
+            labelCount++;
+            totalLabelsPlaced++;
+        }
+    }
+    
+    console.log('Total labels placed:', totalLabelsPlaced);
+    
+    // Store the total label count globally for table population
+    window.detectedTestLocations = totalLabelsPlaced;
+    
+    // Auto-populate test results table
+    window.populateTestResultsTable(totalLabelsPlaced);
+    
+    src.delete();
+    dst.delete();
+    lines.delete();
+}
+
+window.handleFileUpload = function(event) {
+    const files = event.target.files;
+    Array.from(files).forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const fileObj = {
+                name: file.name,
+                type: file.type,
+                data: e.target.result
+            };
+            uploadedFiles.push(fileObj);
+            renderFileList();
+            updateDetectedInfo();
+            // If it's an image, prepare for analysis and preview
+            if (file.type.startsWith('image/')) {
+                currentImage = e.target.result;
+                if (typeof window.displayImageForAnalysis === 'function') {
+                    window.displayImageForAnalysis(e.target.result);
+                }
+            }
+            // Update filename display
+            const uploadedFileName = document.getElementById('uploadedFileName');
+            if (uploadedFileName && uploadedFiles.length > 0) {
+                uploadedFileName.textContent = uploadedFiles[0].name;
+            }
+        };
+        if (file.type.startsWith('image/')) {
+            reader.readAsDataURL(file);
+        } else if (file.type === 'application/pdf') {
+            reader.readAsArrayBuffer(file);
+        } else {
+            reader.readAsDataURL(file);
+        }
+    });
+};
+
+window.handlePhotoUpload = function(event) {
+    window.handleFileUpload(event);
+};
+
+// Re-apply labeling when the user updates interval (clears canvas and relabels)
+window.applyInterval = function() {
+    if (!currentImage) {
+        alert('Upload a drawing first.');
+        return;
+    }
+    const canvas = document.getElementById('drawingCanvas');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Redraw image
+        const img = new Image();
+        img.onload = function() {
+            ctx.drawImage(img, 0, 0);
+            // Re-run detection with new interval
+            if (typeof window.autoDetectAndLabel === 'function') {
+                window.autoDetectAndLabel(currentImage);
+            }
+        };
+        img.src = currentImage;
+    }
+};
+
+// Show the uploaded image on the analysis canvas
+window.displayImageForAnalysis = function(dataUrl) {
+    const canvas = document.getElementById('drawingCanvas');
+    const analysisSection = document.getElementById('analysisSection');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.onload = function() {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        if (analysisSection) analysisSection.classList.remove('hidden');
+        // Auto-run detection and labeling after the image is drawn
+        if (typeof window.autoDetectAndLabel === 'function') {
+            window.autoDetectAndLabel(dataUrl);
+        }
+    };
+    img.src = dataUrl;
+};
+
+function renderFileList() {
+    const fileList = document.getElementById('fileList');
+    if (!fileList) return;
+    fileList.innerHTML = '';
+    
+    uploadedFiles.forEach((file, index) => {
+        const div = document.createElement('div');
+        div.className = 'file-item';
+        div.innerHTML = `
+            <span>${file.name}</span>
+            <button type="button" onclick="window.removeFile(${index})">Remove</button>
+        `;
+        fileList.appendChild(div);
+    });
+}
+
+window.removeFile = function(index) {
+    uploadedFiles.splice(index, 1);
+    renderFileList();
+    if (uploadedFiles.length === 0) {
+        const elem = document.getElementById('uploadedFileName');
+        if (elem) elem.textContent = 'Click to change';
+    }
+};
+
+window.populateTestResultsTable = function(numLocations) {
+    const tableBody = document.getElementById('tableBody');
+    if (!tableBody) return;
+    
+    // Clear existing rows
+    tableBody.innerHTML = '';
+    
+    // Create rows for each detected location
+    for (let i = 1; i <= numLocations; i++) {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>Location ${i}</td>
+            <td><input type="number" min="0" max="100" placeholder="%" /></td>
+            <td><input type="number" min="0" max="100" placeholder="%" /></td>
+            <td><input type="text" placeholder="Notes" /></td>
+        `;
+        tableBody.appendChild(row);
+    }
+};
+
+function updateDetectedInfo() {
+    const detectedInfo = document.getElementById('detectedInfo');
+    if (!detectedInfo) return;
+    
+    if (uploadedFiles.length === 0) {
+        detectedInfo.innerHTML = '<p>Upload a drawing to auto-detect information...</p>';
+        return;
+    }
+    
+    detectedInfo.innerHTML = `
+        <p>✓ ${uploadedFiles.length} file(s) uploaded</p>
+        <p>• Auto-Sectioning: Segments detected</p>
+        <p>• Drawing dimensions: Ready for analysis</p>
+    `;
+}
+
+function displayImageForAnalysis(imageData) {
+    // This function can be expanded later for image analysis
+    console.log('Image prepared for analysis');
+}
+
+function saveRecord() {
+    if (!validateForm()) {
+        alert('Please fill in all required fields.');
+        return;
+    }
+
+    const config = testConfigs[currentTestType];
+    const tableData = getTableData();
+    
+    const record = {
+        id: Date.now(),
+        testType: currentTestType,
+        testTitle: config.title,
+        inspectorName: document.getElementById('inspectorName').value,
+        siteLocation: document.getElementById('siteLocation').value,
+        testDate: document.getElementById('testDate').value,
+        testingFrequency: document.getElementById('testingFrequency').value,
+        notes: document.getElementById('notes').value,
+        tableData: tableData,
+        files: uploadedFiles,
+        typeSpecificData: {}
+    };
+    
+    // Collect type-specific data
+    config.fields.forEach(field => {
+        const elem = document.getElementById(field.id);
+        if (elem) record.typeSpecificData[field.id] = elem.value;
+    });
+    
+    // Save to localStorage
+    let records = JSON.parse(localStorage.getItem('qaRecords') || '[]');
+    records.push(record);
+    localStorage.setItem('qaRecords', JSON.stringify(records));
+    
+    return record;
+}
+
+function submitAndExport() {
+    if (!validateForm()) {
+        alert('Please fill in all required fields.');
+        return;
+    }
+
+    const record = saveRecord();
+    if (record && record.id) {
+        exportToDOCX(record.id);
+    }
+}
+
+function validateForm() {
+    const inspector = document.getElementById('inspectorName') ? document.getElementById('inspectorName').value.trim() : '';
+    const location = document.getElementById('siteLocation') ? document.getElementById('siteLocation').value.trim() : '';
+    const frequency = document.getElementById('testingFrequency') ? document.getElementById('testingFrequency').value.trim() : '';
+    
+    return inspector && location && frequency;
+}
+
+function getTableData() {
+    const tbody = document.getElementById('tableBody');
+    if (!tbody) return [];
+    const data = [];
+    
+    tbody.querySelectorAll('tr').forEach(row => {
+        const cells = row.querySelectorAll('td input');
+        if (cells.length === 4) {
+            data.push({
+                location: cells[0].value,
+                density: cells[1].value,
+                moisture: cells[2].value,
+                notes: cells[3].value
+            });
+        }
+    });
+    
+    return data;
+}
+
+window.addTableRow = function() {
+    const tbody = document.getElementById('tableBody');
+    if (!tbody) return;
+    const rowNum = tbody.rows ? tbody.rows.length + 1 : 1;
+    
+    const row = tbody.insertRow();
+    row.innerHTML = `
+        <td><input type="text" placeholder="Location ${rowNum}"></td>
+        <td><input type="number" placeholder="0" step="0.1"></td>
+        <td><input type="number" placeholder="0" step="0.1"></td>
+        <td><input type="text" placeholder="Notes..."></td>
+    `;
+};
+
+// Export to DOCX
+async function exportToDOCX(recordId) {
+    const records = JSON.parse(localStorage.getItem('qaRecords') || '[]');
+    const record = records.find(r => r.id === recordId);
+    
+    if (!record) {
+        alert('Record not found');
+        return;
+    }
+    
+    try {
+        // Wait for docx library to load
+        let attempts = 0;
+        let docxLib = window.docx;
+        
+        while (!docxLib && attempts < 10) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            docxLib = window.docx;
+            attempts++;
+        }
+        
+        if (!docxLib) {
+            console.error('docx library not available:', { window_docx: window.docx, docxLib });
+            alert('Document library not loaded. Please refresh the page and try again.');
+            return;
+        }
+        
+        const Document = docxLib.Document;
+        const Packer = docxLib.Packer;
+        const Paragraph = docxLib.Paragraph;
+        const Table = docxLib.Table;
+        const TableCell = docxLib.TableCell;
+        const TableRow = docxLib.TableRow;
+        
+        if (!Document || !Packer) {
+            console.error('Required classes not found in docx library');
+            alert('Document library components missing. Please refresh the page.');
+            return;
+        }
+        
+        // Build document sections
+        const sections = [
+            new Paragraph({
+                text: record.testTitle,
+                bold: true,
+                size: 28
+            }),
+            new Paragraph(''),
+            new Paragraph({
+                text: 'Test Information',
+                bold: true,
+                size: 20
+            }),
+            new Paragraph(`Inspector: ${record.inspectorName}`),
+            new Paragraph(`Site Location: ${record.siteLocation}`),
+            new Paragraph(`Date: ${new Date(record.testDate).toLocaleDateString()}`),
+            new Paragraph(`Testing Frequency: ${record.testingFrequency}`),
+            new Paragraph('')
+        ];
+        
+        // Add type-specific data
+        if (Object.keys(record.typeSpecificData).length > 0) {
+            sections.push(new Paragraph({
+                text: 'Test-Specific Data',
+                bold: true,
+                size: 20
+            }));
+            
+            const config = testConfigs[record.testType];
+            if (config) {
+                config.fields.forEach(field => {
+                    sections.push(new Paragraph(`${field.label}: ${record.typeSpecificData[field.id] || 'N/A'}`));
+                });
+            }
+            sections.push(new Paragraph(''));
+        }
+        
+        // Add test results table
+        if (record.tableData && record.tableData.length > 0) {
+            sections.push(new Paragraph({
+                text: 'Test Results',
+                bold: true,
+                size: 20
+            }));
+            
+            const tableRows = [
+                new TableRow({
+                    children: [
+                        new TableCell({ children: [new Paragraph('Test Location')], shading: { fill: '1e5a96' } }),
+                        new TableCell({ children: [new Paragraph('Density (%)')], shading: { fill: '1e5a96' } }),
+                        new TableCell({ children: [new Paragraph('Moisture (%)')], shading: { fill: '1e5a96' } }),
+                        new TableCell({ children: [new Paragraph('Notes')], shading: { fill: '1e5a96' } })
+                    ]
+                })
+            ];
+            
+            record.tableData.forEach(row => {
+                tableRows.push(
+                    new TableRow({
+                        children: [
+                            new TableCell({ children: [new Paragraph(row.location || '-')] }),
+                            new TableCell({ children: [new Paragraph(row.density || '-')] }),
+                            new TableCell({ children: [new Paragraph(row.moisture || '-')] }),
+                            new TableCell({ children: [new Paragraph(row.notes || '-')] })
+                        ]
+                    })
+                );
+            });
+            
+            sections.push(new Table({
+                rows: tableRows,
+                width: { size: 100, type: 'pct' }
+            }));
+            sections.push(new Paragraph(''));
+        }
+        
+        // Add notes
+        if (record.notes) {
+            sections.push(new Paragraph({
+                text: 'Notes',
+                bold: true,
+                size: 20
+            }));
+            sections.push(new Paragraph(record.notes));
+            sections.push(new Paragraph(''));
+        }
+        
+        // Add attachments
+        if (record.files && record.files.length > 0) {
+            sections.push(new Paragraph({
+                text: 'Attachments',
+                bold: true,
+                size: 20
+            }));
+            
+            record.files.forEach(file => {
+                sections.push(new Paragraph(`• ${file.name}`));
+                
+                if (file.type.startsWith('image/') && file.data) {
+                    try {
+                        const base64Data = file.data.includes('base64,') ? file.data.split('base64,')[1] : file.data;
+                        sections.push(new Paragraph({
+                            children: [
+                                {
+                                    type: 'image',
+                                    data: base64Data,
+                                    transformation: {
+                                        width: 400,
+                                        height: 300
+                                    }
+                                }
+                            ]
+                        }));
+                    } catch (e) {
+                        console.warn('Could not embed image:', e);
+                        sections.push(new Paragraph('(Image could not be embedded)'));
+                    }
+                }
+            });
+        }
+        
+        const doc = new Document({
+            sections: [{
+                children: sections
+            }]
+        });
+        
+        Packer.toBlob(doc).then(blob => {
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `${record.testTitle.replace(/\s+/g, '_')}_${record.testDate}.docx`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            alert('Document exported successfully!');
+            window.goBack();
+        }).catch(err => {
+            console.error('Export error:', err);
+            alert('Failed to generate document. Please try again.');
+        });
+    } catch (e) {
+        console.error('Export error:', e);
+        alert('Error exporting document: ' + e.message);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOM loaded, calling initializeApp');
+    initializeApp();
+});
+
