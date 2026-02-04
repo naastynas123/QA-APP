@@ -182,11 +182,27 @@
                                 <button type="button" class="btn-primary" onclick="window.applyInterval()">Apply interval</button>
                             </div>
                         </div>
+                        
+
                         <!-- Image Analysis Section -->
                         <div id="analysisSection" class="analysis-section hidden">
                             <h4>Image Analysis</h4>
-                            <div id="drawingPreview" class="drawing-preview">
-                                <canvas id="drawingCanvas"></canvas>
+                            
+                            <!-- Scale Calibration Panel -->
+                            <div style="background:#f0f0f0; padding:12px; border-radius:6px; margin-bottom:12px;">
+                                <h5 style="margin-top:0;">🎯 Scale Calibration (REQUIRED for labels)</h5>
+                                <p style="margin:8px 0; font-size:0.9em; color:#666;">Labels won't appear unless you set the scale!</p>
+                                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                                    <button type="button" class="btn-primary" onclick="window.startScaleCalibration()" style="background:#ff6b6b;">📏 Calibrate Scale (2-Click)</button>
+                                    <button type="button" class="btn-secondary" onclick="window.setQuickScale()">⚡ Use Preset (1:500)</button>
+                                </div>
+                                <div id="scaleStatus" style="padding:8px; background:white; border-radius:4px; border-left:4px solid #ff6b6b; font-size:0.85em;">
+                                    ⚠️ <strong>Scale not set</strong> - Labels will use default 1:500
+                                </div>
+                            </div>
+                            
+                            <div id="drawingPreview" class="drawing-preview" style="overflow:auto; position:relative;">
+                                <canvas id="drawingCanvas" style="display:block; margin:0 auto;"></canvas>
                             </div>
                             <div id="analysisResults" class="analysis-results"></div>
                         </div>

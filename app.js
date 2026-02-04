@@ -495,14 +495,112 @@ window.autoDetectAndLabel = async function(dataUrl) {
         ? parseFloat(intervalInput.value)
         : 5;
     
+    console.log('[autoDetectAndLabel] Starting with interval:', intervalMeters, 'meters');
+    
+    // Use user-calibrated scale if available, otherwise detect from image
+    let scaleToUse = 500; // default denominator
+    
+    if (window.globalScale) {
+        // User has calibrated scale: convert back to denominator (e.g., 1:500)
+        scaleToUse = Math.round(1 / window.globalScale);
+        console.log('[autoDetectAndLabel] Using calibrated scale: 1:' + scaleToUse);
+    } else {
+        // Fall back to image detection
+        console.log('[autoDetectAndLabel] Detecting scale from image...');
+        const detectedScale = await detectScaleFromImage(dataUrl);
+        if (detectedScale) {
+            scaleToUse = detectedScale;
+        }
+        console.log('[autoDetectAndLabel] Scale denominator:', scaleToUse);
+    }
+    
     // Extract actual dimensions from the drawing (primary source)
+    console.log('[autoDetectAndLabel] Extracting dimensions from image...');
     const dimensions = await extractDimensionsFromImage(dataUrl);
-    console.log('Extracted dimensions (mm):', dimensions);
+    console.log('[autoDetectAndLabel] Extracted dimensions (mm):', dimensions);
     
     if (typeof detectWallsAndAnnotate === 'function') {
-        detectWallsAndAnnotate(canvas, { intervalMeters, dimensions });
+        detectWallsAndAnnotate(canvas, { intervalMeters, dimensions, scaleDetected: scaleToUse });
     }
 };
+
+// Create a mask from brown boundary lines to exclude annotations/legend
+function createBrownBoundaryMask(imageData) {
+    const data = imageData.data;
+    const width = imageData.width;
+    const height = imageData.height;
+    
+    // Create white mask image (all white initially)
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = width;
+    maskCanvas.height = height;
+    const maskCtx = maskCanvas.getContext('2d');
+    maskCtx.fillStyle = 'white';
+    maskCtx.fillRect(0, 0, width, height);
+    const maskImageData = maskCtx.getImageData(0, 0, width, height);
+    const maskData = maskImageData.data;
+    
+    // Detect brown boundary pixels and dilate them
+    // Looking for darker brown (legend areas), not tan building fills
+    const brownPixels = new Set();
+    for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        
+        // Detect darker brown (legend/annotation areas): R > 100, G < 80, B < 70
+        // This avoids matching light tan building fills
+        if (r > 100 && g < 80 && b < 70 && r > g && r > b) {
+            brownPixels.add(i / 4);
+        }
+    }
+    
+    if (brownPixels.size === 0) {
+        // No brown found - use entire image
+        return maskImageData;
+    }
+    
+    // Find bounding box of brown pixels
+    let minX = width, maxX = 0, minY = height, maxY = 0;
+    brownPixels.forEach(idx => {
+        const x = idx % width;
+        const y = Math.floor(idx / width);
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+    });
+    
+    // Expand bounding box by 10% to include nearby walls
+    const expandX = Math.max(5, Math.floor((maxX - minX) * 0.05));
+    const expandY = Math.max(5, Math.floor((maxY - minY) * 0.05));
+    minX = Math.max(0, minX - expandX);
+    maxX = Math.min(width - 1, maxX + expandX);
+    minY = Math.max(0, minY - expandY);
+    maxY = Math.min(height - 1, maxY + expandY);
+    
+    // Set mask: white inside building area, black outside (to be ignored)
+    for (let i = 0; i < maskData.length; i += 4) {
+        const idx = i / 4;
+        const x = idx % width;
+        const y = Math.floor(idx / width);
+        
+        if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
+            maskData[i] = 255;     // R
+            maskData[i + 1] = 255; // G
+            maskData[i + 2] = 255; // B
+            maskData[i + 3] = 255; // A
+        } else {
+            maskData[i] = 0;     // R
+            maskData[i + 1] = 0; // G
+            maskData[i + 2] = 0; // B
+            maskData[i + 3] = 255; // A
+        }
+    }
+    
+    maskCtx.putImageData(maskImageData, 0, 0);
+    return maskImageData;
+}
 
 // Use OpenCV.js to detect straight lines (walls) and place labels based on actual dimensions
 function detectWallsAndAnnotate(canvas, options = {}) {
@@ -512,30 +610,51 @@ function detectWallsAndAnnotate(canvas, options = {}) {
     }
     const intervalMeters = options.intervalMeters || 5;
     const dimensions = options.dimensions || [];
+    const scaleDetected = options.scaleDetected || 500;  // Default to 1:500 if not detected
     
-    console.log('Detected dimensions:', dimensions, 'Interval:', intervalMeters);
+    console.log('[detectWallsAndAnnotate] Scale:', scaleDetected, 'Interval:', intervalMeters, 'Dimensions:', dimensions);
+    const startTime = performance.now();
     
     const context = canvas.getContext('2d');
+    
+    // Store original image before detection modifies the canvas
+    const originalImageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    
+    // Step 1: Create a mask of the brown building boundary
+    const brownMask = createBrownBoundaryMask(originalImageData);
+    
     const src = cv.imread(canvas);
     let dst = new cv.Mat();
     let lines = new cv.Mat();
+    let mask = cv.matFromImageData(brownMask);
     
     // Convert to grayscale
     cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY, 0);
-    // Apply morphological operations to enhance continuous lines and suppress noise
+    
+    // Apply the brown boundary mask to ignore annotations/legend
+    cv.bitwise_and(dst, mask, dst);
+    
+    // Apply morphological operations to enhance continuous lines
     let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2));
     cv.morphologyEx(dst, dst, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 1);
+    cv.morphologyEx(dst, dst, cv.MORPH_OPEN, kernel, new cv.Point(-1, -1), 1);
     kernel.delete();
     
-    // Edge detection - moderate sensitivity to catch all walls
-    cv.Canny(dst, dst, 48, 135, 3, false);
-    // Hough line transform - balanced to catch all walls
-    cv.HoughLinesP(dst, lines, 1, Math.PI / 180, 82, 48, 11);
+    // Apply Gaussian blur to reduce noise and connect near-broken lines
+    cv.GaussianBlur(dst, dst, new cv.Size(3, 3), 0);
+    
+    // Edge detection - improved thresholds for better wall detection
+    cv.Canny(dst, dst, 30, 90, 3, false);
+    
+    // Hough line transform - improved to detect more walls
+    cv.HoughLinesP(dst, lines, 1, Math.PI / 180, 40, 30, 15);
+    
+    console.log('Detected', lines.rows, 'line segments before merging');
     
     // --- Merge collinear and connected lines ---
-    const minLineLength = canvas.width / 18;  // 5.5% threshold - catches all walls but not noise
-    const angleThreshold = 0.08;  // Stricter angle - don't merge unless truly collinear
-    const distThreshold = 15;  // Much lower - only merge adjacent segments, not walls with gaps
+    const minLineLength = canvas.width / 35;  // More lenient minimum line length
+    const angleThreshold = 0.15;  // Increased tolerance for angle differences
+    const distThreshold = 35;  // Increased distance threshold for nearby lines
     let mergedLines = [];
     let used = new Array(lines.rows).fill(false);
     
@@ -605,13 +724,13 @@ function detectWallsAndAnnotate(canvas, options = {}) {
             // Check if parallel (same angle within threshold)
             const angle1 = Math.atan2(dy1, dx1);
             const angle2 = Math.atan2(dy2, dx2);
-            const angleThreshold = 0.08;
+            const angleThreshold = 0.10;
             
             if (Math.abs(angle1 - angle2) < angleThreshold || Math.abs(Math.abs(angle1 - angle2) - Math.PI) < angleThreshold) {
                 // Check distance between walls (perpendicular distance)
                 const perpDist = Math.abs((wall.x1 - other.x1) * dy1 - (wall.y1 - other.y1) * dx1) / Math.sqrt(dx1*dx1 + dy1*dy1);
                 
-                if (perpDist < 35) {  // Only merge if VERY close (true double walls)
+                if (perpDist < 50) {  // Increased threshold - only merge if very close (true double walls)
                     // Take the longer one
                     const len1 = Math.sqrt(dx1*dx1 + dy1*dy1);
                     const len2 = Math.sqrt(dx2*dx2 + dy2*dy2);
@@ -631,41 +750,112 @@ function detectWallsAndAnnotate(canvas, options = {}) {
     
     // Filter and sort walls
     // For subdivision plans: filter out the outer frame and keep internal walls
-    const frameThreshold = 20;  // Pixels from edge - ignore frame boundary
+    const frameThreshold = 8;  // Pixels from edge - less aggressive framing
     mergedLines = mergedLines
         .map(l => ({...l, length: Math.sqrt((l.x2-l.x1)**2 + (l.y2-l.y1)**2)}))
         .filter(l => {
-            // Exclude outer frame (lines very close to canvas edges)
+            // Exclude outer frame (lines very close to canvas edges) - but less aggressively
             const minDist = Math.min(l.x1, l.x2, l.y1, l.y2, canvas.width - l.x1, canvas.width - l.x2, canvas.height - l.y1, canvas.height - l.y2);
-            if (minDist < frameThreshold) {
-                console.log('Filtered out frame line at distance:', minDist);
+            if (minDist < frameThreshold && (minDist < 3 || minDist > canvas.width - 3)) {
+                // Only filter if extremely close to very edge
                 return false;
             }
             
             const dx = l.x2 - l.x1, dy = l.y2 - l.y1;
             const angle = Math.abs(Math.atan2(dy, dx));
-            const isHorizontal = angle < 0.2 || angle > Math.PI - 0.2;
-            const isVertical = Math.abs(angle - Math.PI/2) < 0.2;
-            return (isHorizontal || isVertical) && l.length >= canvas.width / 28;  // 3.6% to catch all walls including 3510, 2910, 2390
+            const isHorizontal = angle < 0.30 || angle > Math.PI - 0.30;
+            const isVertical = Math.abs(angle - Math.PI/2) < 0.30;
+            return (isHorizontal || isVertical) && l.length >= canvas.width / 50;  // Lower threshold to catch more walls
         })
         .sort((a, b) => {
-            // Spatial ordering: divide canvas into regions and label sequentially
-            // This ensures engineers test geographically close locations in sequence
-            const regionSize = Math.max(canvas.width, canvas.height) / 4;
+            // Chronological ordering: start at top-left, trace perimeter clockwise, then interior
+            // This ensures engineers test in a logical, efficient sequence
+            
+            // First, identify if walls are on the boundary or interior
+            const boundaryThreshold = Math.max(canvas.width, canvas.height) / 10;
+            
+            const isABoundary = (wall) => {
+                const minDist = Math.min(wall.x1, wall.x2, wall.y1, wall.y2, 
+                                        canvas.width - wall.x1, canvas.width - wall.x2, 
+                                        canvas.height - wall.y1, canvas.height - wall.y2);
+                return minDist < boundaryThreshold;
+            };
+            
+            const aBoundary = isABoundary(a);
+            const bBoundary = isABoundary(b);
+            
+            if (aBoundary !== bBoundary) {
+                // Perimeter walls first
+                return aBoundary ? -1 : 1;
+            }
+            
+            // For perimeter walls: trace clockwise from top-left
+            if (aBoundary) {
+                // Top edge first (smallest Y)
+                const centerAY = (a.y1 + a.y2) / 2;
+                const centerBY = (b.y1 + b.y2) / 2;
+                const topEdgeThreshold = canvas.height / 4;
+                
+                const aOnTop = centerAY < topEdgeThreshold;
+                const bOnTop = centerBY < topEdgeThreshold;
+                
+                if (aOnTop && !bOnTop) return -1;
+                if (!aOnTop && bOnTop) return 1;
+                
+                if (aOnTop) {
+                    // Top edge: left to right
+                    const centerAX = (a.x1 + a.x2) / 2;
+                    const centerBX = (b.x1 + b.x2) / 2;
+                    return centerAX - centerBX;
+                }
+                
+                // Right edge: top to bottom
+                const rightEdgeThreshold = canvas.width * 0.75;
+                const aOnRight = (a.x1 + a.x2) / 2 > rightEdgeThreshold;
+                const bOnRight = (b.x1 + b.x2) / 2 > rightEdgeThreshold;
+                
+                if (aOnRight && !bOnRight) return -1;
+                if (!aOnRight && bOnRight) return 1;
+                
+                if (aOnRight) {
+                    return (a.y1 + a.y2) / 2 - (b.y1 + b.y2) / 2;
+                }
+                
+                // Bottom edge: right to left
+                const bottomEdgeThreshold = canvas.height * 0.75;
+                const aOnBottom = (a.y1 + a.y2) / 2 > bottomEdgeThreshold;
+                const bOnBottom = (b.y1 + b.y2) / 2 > bottomEdgeThreshold;
+                
+                if (aOnBottom && !bOnBottom) return -1;
+                if (!aOnBottom && bOnBottom) return 1;
+                
+                if (aOnBottom) {
+                    return (b.x1 + b.x2) / 2 - (a.x1 + a.x2) / 2;
+                }
+                
+                // Left edge: bottom to top
+                return (b.y1 + b.y2) / 2 - (a.y1 + a.y2) / 2;
+            }
+            
+            // Interior walls: organize by region
+            const regionSize = Math.max(canvas.width, canvas.height) / 3;
             const getRegion = (wall) => {
                 const centerX = (wall.x1 + wall.x2) / 2;
                 const centerY = (wall.y1 + wall.y2) / 2;
                 const regionX = Math.floor(centerX / regionSize);
                 const regionY = Math.floor(centerY / regionSize);
-                return regionY * 4 + regionX;  // Linear region ID
+                return regionY * 3 + regionX;
             };
+            
             const regionA = getRegion(a);
             const regionB = getRegion(b);
             if (regionA !== regionB) return regionA - regionB;
-            // Within same region, sort by position
+            
+            // Within same region, sort by Y then X
             const centerAY = (a.y1 + a.y2) / 2;
             const centerBY = (b.y1 + b.y2) / 2;
             if (Math.abs(centerAY - centerBY) > 20) return centerAY - centerBY;
+            
             const centerAX = (a.x1 + a.x2) / 2;
             const centerBX = (b.x1 + b.x2) / 2;
             return centerAX - centerBX;
@@ -673,9 +863,26 @@ function detectWallsAndAnnotate(canvas, options = {}) {
     
     console.log('Detected', mergedLines.length, 'walls');
     
+    // Get filter settings - enable brown wall filter to only label brown walls
+    const filterBrownCheckbox = document.getElementById('filterBrownCheckbox');
+    const brownWallFilterEnabled = true;  // ENABLED - detect only brown walls
+    
+    // If brown wall filter is enabled, get image data for color detection
+    let imageData = null;
+    if (brownWallFilterEnabled) {
+        imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    }
+    
+    // Filter walls: if brown filter enabled, keep only brown walls
+    let filteredLines = mergedLines;
+    if (brownWallFilterEnabled && imageData) {
+        filteredLines = mergedLines.filter(wall => window.isBrownWall(wall.x1, wall.y1, wall.x2, wall.y2, imageData));
+        console.log('Brown wall filter applied. Walls before:', mergedLines.length, 'Walls after:', filteredLines.length);
+    }
+    
     // Assign dimensions to walls intelligently
     // Sort dimensions descending, assign to longest walls first
-    let sortedByLength = [...mergedLines].sort((a, b) => b.length - a.length);
+    let sortedByLength = [...filteredLines].sort((a, b) => b.length - a.length);
     let dimensionAssignments = new Map();
     
     console.log('Available dimensions:', dimensions, 'Number of walls:', mergedLines.length);
@@ -713,29 +920,31 @@ function detectWallsAndAnnotate(canvas, options = {}) {
         }
     }
     
-    console.log('Assigned', dimensionAssignments.size, 'dimensions to', mergedLines.length, 'walls');
+    console.log('Assigned', dimensionAssignments.size, 'dimensions to', filteredLines.length, 'walls');
     
     // Label all walls
     let labelCount = 1;
     const maxLabels = 100;
     let totalLabelsPlaced = 0;
     
-    for (let k = 0; k < mergedLines.length && labelCount <= maxLabels; ++k) {
-        let {x1, y1, x2, y2, length, assignedDimension} = mergedLines[k];
+    for (let k = 0; k < filteredLines.length && labelCount <= maxLabels; ++k) {
+        let {x1, y1, x2, y2, length, assignedDimension} = filteredLines[k];
         let dx = x2 - x1;
         let dy = y2 - y1;
         
-        // Use assigned dimension in meters (convert from mm), fallback to pixel-based estimate
+        // Use assigned dimension in meters (convert from mm), fallback to pixel-based estimate using detected scale
         let wallLengthMeters = 0;
         let hasRealDimension = false;
         if (assignedDimension) {
             wallLengthMeters = assignedDimension / 1000;  // mm to meters
             hasRealDimension = true;
+            console.log(`Wall uses extracted dimension: ${assignedDimension}mm = ${wallLengthMeters}m`);
         } else {
-            // Fallback: estimate from pixel length assuming 1:500 scale
-            // Assume canvas.width represents ~500m, so pixels per meter = canvas.width / 500
-            const estimatedPixelsPerMeter = canvas.width / 500;
-            wallLengthMeters = length / estimatedPixelsPerMeter;
+            // Use detected scale (default 1:500): estimate from pixel length
+            // At 1:scaleDetected scale, canvas.width pixels represent scaleDetected meters
+            const pixelsPerMeter = canvas.width / scaleDetected;
+            wallLengthMeters = length / pixelsPerMeter;
+            console.log(`Wall uses scale-based estimate: ${length}px / ${pixelsPerMeter.toFixed(1)}px/m = ${wallLengthMeters.toFixed(2)}m`);
         }
         
         // Calculate number of labels based on wall length and user interval
@@ -808,15 +1017,22 @@ function detectWallsAndAnnotate(canvas, options = {}) {
     
     console.log('Total labels placed:', totalLabelsPlaced);
     
+    // No need to restore original image - keep the labeled version
+    // The labels are already drawn on the canvas above
+    
     // Store the total label count globally for table population
     window.detectedTestLocations = totalLabelsPlaced;
     
     // Auto-populate test results table
     window.populateTestResultsTable(totalLabelsPlaced);
     
+    const endTime = performance.now();
+    console.log(`Wall detection completed in ${(endTime - startTime).toFixed(0)}ms`);
+    
     src.delete();
     dst.delete();
     lines.delete();
+    mask.delete();
 }
 
 window.handleFileUpload = function(event) {
@@ -832,19 +1048,40 @@ window.handleFileUpload = function(event) {
             uploadedFiles.push(fileObj);
             renderFileList();
             updateDetectedInfo();
-            // If it's an image, prepare for analysis and preview
+            
+            // Handle images directly
             if (file.type.startsWith('image/')) {
                 currentImage = e.target.result;
                 if (typeof window.displayImageForAnalysis === 'function') {
                     window.displayImageForAnalysis(e.target.result);
                 }
             }
+            // Handle PDFs by converting to image
+            else if (file.type === 'application/pdf') {
+                console.log('PDF detected, converting to image...');
+                if (typeof PDFDocument !== 'undefined') {
+                    // Using PDF library if available
+                    convertPDFToImage(e.target.result, file.name);
+                } else if (typeof pdfjsLib !== 'undefined') {
+                    // Using PDF.js if available
+                    convertPDFToImagePDFJS(e.target.result);
+                } else {
+                    // Fallback: try pdf.js from CDN or show error
+                    loadPDFJSLibrary().then(() => {
+                        convertPDFToImagePDFJS(e.target.result);
+                    }).catch(() => {
+                        alert('PDF support requires PDF.js library. Please use an image file (PNG, JPG) instead.');
+                    });
+                }
+            }
+            
             // Update filename display
             const uploadedFileName = document.getElementById('uploadedFileName');
             if (uploadedFileName && uploadedFiles.length > 0) {
                 uploadedFileName.textContent = uploadedFiles[0].name;
             }
         };
+        
         if (file.type.startsWith('image/')) {
             reader.readAsDataURL(file);
         } else if (file.type === 'application/pdf') {
@@ -855,8 +1092,115 @@ window.handleFileUpload = function(event) {
     });
 };
 
+// Load PDF.js library dynamically
+window.loadPDFJSLibrary = function() {
+    return new Promise((resolve, reject) => {
+        if (typeof pdfjsLib !== 'undefined') {
+            resolve();
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        script.onload = () => {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            resolve();
+        };
+        script.onerror = () => reject('Failed to load PDF.js');
+        document.head.appendChild(script);
+    });
+};
+
+// Convert PDF to image using PDF.js
+window.convertPDFToImagePDFJS = async function(pdfBuffer) {
+    try {
+        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: 2.0 });
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        
+        await page.render({
+            canvasContext: ctx,
+            viewport: viewport
+        }).promise;
+        
+        currentImage = canvas.toDataURL('image/png');
+        console.log('PDF converted to image');
+        
+        if (typeof window.displayImageForAnalysis === 'function') {
+            window.displayImageForAnalysis(currentImage);
+        }
+    } catch (error) {
+        console.error('Error converting PDF:', error);
+        alert('Error converting PDF. Please use a JPG or PNG image instead.');
+    }
+};
+
 window.handlePhotoUpload = function(event) {
     window.handleFileUpload(event);
+};
+
+// Detect if a wall line contains brown pixels (for brown wall filtering)
+window.isBrownWall = function(x1, y1, x2, y2, imageData) {
+    if (!imageData) return false;
+    
+    const data = imageData.data;
+    const width = imageData.width;
+    
+    // Sample along the line to check for brown color
+    const numSamples = Math.max(10, Math.floor(Math.sqrt((x2-x1)**2 + (y2-y1)**2) / 5));
+    let brownPixelCount = 0;
+    let sampledColors = [];
+    
+    for (let i = 0; i < numSamples; i++) {
+        const t = i / numSamples;
+        const x = Math.round(x1 + (x2 - x1) * t);
+        const y = Math.round(y1 + (y2 - y1) * t);
+        
+        if (x < 0 || x >= width || y < 0 || y >= imageData.height) continue;
+        
+        const pixelIdx = (y * width + x) * 4;
+        const r = data[pixelIdx];
+        const g = data[pixelIdx + 1];
+        const b = data[pixelIdx + 2];
+        const a = data[pixelIdx + 3];
+        
+        sampledColors.push({r, g, b, a});
+        
+        // Brown color detection: R is dominant, G and B are lower
+        // Brown walls typically: R > 130, and R > G and R > B
+        // More lenient to catch tan/brown shades
+        if (r > 130 && r > g && r > b && (g < 120 || b < 100)) {
+            brownPixelCount++;
+        }
+    }
+    
+    // Consider it brown if 25% or more samples are brown (more lenient than 30%)
+    const isBrown = brownPixelCount >= numSamples * 0.25;
+    
+    if (false) { // Set to true for debugging
+        console.log(`Wall (${x1},${y1})->(${x2},${y2}): ${brownPixelCount}/${numSamples} brown = ${isBrown}`);
+        if (sampledColors.length > 0) {
+            console.log('Sample colors:', sampledColors.slice(0, 3));
+        }
+    }
+    
+    return isBrown;
+};
+
+// Apply brown wall filter: only show/label brown walls
+window.toggleBrownWallFilter = function(enabled) {
+    const filterBrownCheckbox = document.getElementById('filterBrownCheckbox');
+    if (filterBrownCheckbox) {
+        filterBrownCheckbox.checked = enabled;
+    }
+    
+    // Re-run detection with new filter
+    if (currentImage && typeof window.autoDetectAndLabel === 'function') {
+        window.autoDetectAndLabel(currentImage);
+    }
 };
 
 // Re-apply labeling when the user updates interval (clears canvas and relabels)
@@ -882,6 +1226,9 @@ window.applyInterval = function() {
     }
 };
 
+// Zoom control functions - REMOVED
+
+
 // Show the uploaded image on the analysis canvas
 window.displayImageForAnalysis = function(dataUrl) {
     const canvas = document.getElementById('drawingCanvas');
@@ -902,6 +1249,7 @@ window.displayImageForAnalysis = function(dataUrl) {
     };
     img.src = dataUrl;
 };
+
 
 function renderFileList() {
     const fileList = document.getElementById('fileList');
@@ -1245,6 +1593,110 @@ async function exportToDOCX(recordId) {
         alert('Error exporting document: ' + e.message);
     }
 }
+
+// --- SCALE CALIBRATION HANDLERS ---
+let globalScale = null; // metres per pixel
+let calibrationMode = false;
+let calibrationClicks = [];
+
+window.startScaleCalibration = function() {
+    console.log('Starting scale calibration...');
+    const canvas = document.getElementById('analysisCanvas');
+    if (!canvas) {
+        alert('Canvas not found');
+        return;
+    }
+    
+    calibrationMode = true;
+    calibrationClicks = [];
+    canvas.style.cursor = 'crosshair';
+    
+    const statusDiv = document.getElementById('scaleStatus');
+    if (statusDiv) {
+        statusDiv.innerHTML = '📍 Click first point on canvas (position crosshair)...';
+    }
+    
+    const handleCanvasClick = (e) => {
+        if (!calibrationMode) return;
+        
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        calibrationClicks.push({x, y});
+        console.log(`Click ${calibrationClicks.length}: (${x}, ${y})`);
+        
+        if (calibrationClicks.length === 1) {
+            if (statusDiv) {
+                statusDiv.innerHTML = '📍 Click second point on canvas...';
+            }
+        } else if (calibrationClicks.length === 2) {
+            // Calculate pixel distance
+            const dx = calibrationClicks[1].x - calibrationClicks[0].x;
+            const dy = calibrationClicks[1].y - calibrationClicks[0].y;
+            const pixelDistance = Math.sqrt(dx * dx + dy * dy);
+            
+            calibrationMode = false;
+            canvas.style.cursor = 'default';
+            canvas.removeEventListener('click', handleCanvasClick);
+            
+            // Prompt for real-world distance
+            const realWorldDistance = prompt(
+                `Distance between the two points (in metres)?\n\nPixel distance: ${pixelDistance.toFixed(1)}px`,
+                '1'
+            );
+            
+            if (realWorldDistance === null) {
+                if (statusDiv) {
+                    statusDiv.innerHTML = '⚠️ Calibration cancelled';
+                }
+                return;
+            }
+            
+            const metres = parseFloat(realWorldDistance);
+            if (isNaN(metres) || metres <= 0) {
+                alert('Invalid distance entered');
+                if (statusDiv) {
+                    statusDiv.innerHTML = '⚠️ Invalid distance entered';
+                }
+                return;
+            }
+            
+            globalScale = metres / pixelDistance;
+            console.log(`Scale set: 1 pixel = ${globalScale.toFixed(6)} metres`);
+            
+            if (statusDiv) {
+                statusDiv.innerHTML = `✅ <strong>Scale calibrated</strong>: 1 pixel = ${globalScale.toFixed(4)} metres (1:${(1/globalScale).toFixed(0)})`;
+            }
+            
+            // Re-run detection with new scale
+            if (currentImage) {
+                setTimeout(() => {
+                    console.log('Re-running detection with new scale...');
+                    autoDetectAndLabel(currentImage);
+                }, 500);
+            }
+        }
+    };
+    
+    canvas.addEventListener('click', handleCanvasClick);
+};
+
+window.setQuickScale = function() {
+    console.log('Setting quick scale to 1:500...');
+    globalScale = 1 / 500; // 1 pixel = 1/500 metres = 0.002 metres
+    
+    const statusDiv = document.getElementById('scaleStatus');
+    if (statusDiv) {
+        statusDiv.innerHTML = `✅ <strong>Scale set to preset</strong>: 1 pixel = ${globalScale.toFixed(4)} metres (1:500)`;
+    }
+    
+    // Re-run detection with new scale
+    if (currentImage) {
+        console.log('Re-running detection with preset scale...');
+        autoDetectAndLabel(currentImage);
+    }
+};
 
 document.addEventListener('DOMContentLoaded', () => {
     console.log('DOM loaded, calling initializeApp');

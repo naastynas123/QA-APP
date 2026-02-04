@@ -896,6 +896,21 @@ tbody tr:hover {
     border: 1px solid var(--border);
     display: block;
     margin: 0 auto;
+    cursor: crosshair;
+}
+
+/* Magnifier glass styling */
+.magnifier-glass {
+    position: fixed !important;
+    width: 150px !important;
+    height: 150px !important;
+    border: 3px solid #333 !important;
+    border-radius: 50% !important;
+    background: white !important;
+    box-shadow: 0 0 8px rgba(0,0,0,0.3), inset 0 0 5px rgba(0,0,0,0.1) !important;
+    pointer-events: none !important;
+    z-index: 1000 !important;
+    cursor: none !important;
 }
 
 .analysis-controls {
