@@ -2,6 +2,42 @@
 
 A web application for detecting and labelling walls in civil engineering floor-plan drawings. Upload a PDF, calibrate the scale, and the system identifies brown-coloured walls using computer vision and places measurement labels automatically.
 
+## ✅ Status: Complete
+
+All major features are implemented and tested (54 backend tests passing):
+
+- **Frontend:** Main QA app (login, forms, records) + dedicated Wall Detector page with 3-panel layout
+- **Backend:** Python FastAPI with OpenCV wall detection, label placement, and annotated image export
+- **Docker:** Full-stack and standalone Dockerfiles with docker-compose
+- **Tests:** 54 unit tests covering distance conversion, label formatting, and label placement
+
+## 🚀 Getting Started (VS Code – Local Development)
+
+**See [SETUP.md](SETUP.md) for the complete step-by-step guide.**
+
+Quick version:
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/naastynas123/QA-APP.git
+cd QA-APP
+
+# 2. Install frontend dependencies
+npm install
+
+# 3. Install backend dependencies
+cd backend
+pip install -r requirements.txt
+cd ..
+
+# 4. Start both servers
+npm run dev
+
+# 5. Open in browser
+#    Main app:      http://localhost:8000
+#    Wall Detector: http://localhost:8000/wall-detector.html
+```
+
 ## Architecture
 
 ```
