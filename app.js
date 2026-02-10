@@ -1758,16 +1758,13 @@ let wdPickingColor = false;
 function updateWdButtons() {
     const hasImage = !!wdImageBase64;
     const hasWalls = wdWalls.length > 0;
-    const hasScale = globalScale && globalScale > 0;
     
-    const detectBtn = document.getElementById('wdDetectBtn');
-    const labelBtn = document.getElementById('wdLabelBtn');
+    const measureBtn = document.getElementById('wdMeasureBtn');
     const exportPng = document.getElementById('wdExportPng');
     const exportJson = document.getElementById('wdExportJson');
     const pickBtn = document.getElementById('wdPickColorBtn');
     
-    if (detectBtn) detectBtn.disabled = !hasImage;
-    if (labelBtn) labelBtn.disabled = !(hasWalls && hasScale);
+    if (measureBtn) measureBtn.disabled = !hasImage;
     if (exportPng) exportPng.disabled = !hasWalls;
     if (exportJson) exportJson.disabled = !hasWalls;
     if (pickBtn) pickBtn.disabled = !hasImage;
@@ -1779,7 +1776,18 @@ function wdSetImageBase64(dataUrl) {
     wdImageBase64 = dataUrl.replace(/^data:[^;]+;base64,/, "");
     wdWalls = [];
     wdLabels = [];
+    ensureDefaultScale();
     updateWdButtons();
+}
+
+/** Auto-apply the default scale if none is set */
+function ensureDefaultScale() {
+    if (!globalScale || globalScale <= 0) {
+        const presetEl = document.getElementById('wdScalePreset');
+        const denom = presetEl ? parseInt(presetEl.value, 10) : 500;
+        globalScale = 1 / denom;
+        window.globalScale = globalScale;
+    }
 }
 
 /** Colour picker – sample colour from canvas on click */
@@ -1812,6 +1820,91 @@ window.startColorPick = function() {
     };
     
     canvas.addEventListener('click', pickHandler);
+};
+
+/** Apply a scale preset from the dropdown */
+window.applyScalePreset = function(denominator) {
+    const denom = parseInt(denominator, 10);
+    if (isNaN(denom) || denom <= 0) return;
+    globalScale = 1 / denom;
+    window.globalScale = globalScale;
+    const statusDiv = document.getElementById('scaleStatus');
+    if (statusDiv) {
+        statusDiv.innerHTML = `📏 Scale: <strong>1:${denom}</strong>`;
+        statusDiv.style.borderLeftColor = '#10b981';
+    }
+    console.log(`[WD] Scale set to 1:${denom}`);
+};
+
+/** One-click: detect walls + label them in a single action */
+window.measureAndLabel = async function() {
+    if (!wdImageBase64) { alert('Upload a drawing first.'); return; }
+    
+    const measureBtn = document.getElementById('wdMeasureBtn');
+    
+    // Step 1: Auto-apply scale if not set
+    ensureDefaultScale();
+    
+    if (measureBtn) measureBtn.textContent = '⏳ Detecting walls...';
+    
+    try {
+        // Step 2: Detect walls
+        const tol = parseInt(document.getElementById('wdTolerance')?.value || '10', 10);
+        const hsv = wdBrownHSV;
+        const detectBody = {
+            image_base64: wdImageBase64,
+            brown_hsv_lower: { h: Math.max(0, hsv.h - tol), s: Math.max(0, hsv.s - 40), v: Math.max(0, hsv.v - 60) },
+            brown_hsv_upper: { h: Math.min(179, hsv.h + tol), s: Math.min(255, hsv.s + 40), v: Math.min(255, hsv.v + 60) },
+            tolerance: tol,
+            min_area: parseInt(document.getElementById('wdMinArea')?.value || '500', 10),
+            fill_holes: document.getElementById('wdFillHoles')?.checked ?? true,
+        };
+        
+        const detectData = await wdApiPost("/detect_walls", detectBody);
+        wdWalls = detectData.walls || [];
+        wdLabels = [];
+        console.log(`[WD] Detected ${detectData.wall_count} wall(s)`);
+        
+        if (wdWalls.length === 0) {
+            renderWdOverlay();
+            updateWdResults();
+            updateWdButtons();
+            alert('No walls detected. Try adjusting the tolerance or wall colour in Advanced Settings.');
+            return;
+        }
+        
+        // Step 3: Label walls
+        if (measureBtn) measureBtn.textContent = '⏳ Placing labels...';
+        
+        const spacing = parseFloat(document.getElementById('testInterval')?.value || '5');
+        const prefix = document.getElementById('wdPrefix')?.value || 'RW';
+        
+        const labelBody = {
+            walls: wdWalls,
+            scale_metres_per_pixel: globalScale,
+            spacing_metres: spacing,
+            prefix: prefix,
+            min_remaining_fraction: 0.5,
+        };
+        
+        const labelData = await wdApiPost("/label_walls", labelBody);
+        wdLabels = labelData.labels || [];
+        console.log(`[WD] Placed ${labelData.label_count} label(s)`);
+        
+        renderWdOverlay();
+        updateWdResults();
+        updateWdButtons();
+        
+        // Populate the test results table
+        window.populateTestResultsTable(labelData.label_count);
+        
+        alert(`✅ Done! Found ${wdWalls.length} wall(s) and placed ${labelData.label_count} label(s).`);
+    } catch (err) {
+        console.error('[WD] Measure & Label error:', err);
+        alert('Measure & Label failed: ' + err.message);
+    } finally {
+        if (measureBtn) measureBtn.textContent = '📏 Measure & Label';
+    }
 };
 
 /** Detect walls via backend */
