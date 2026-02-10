@@ -35,7 +35,6 @@
             <li><a href="#" onclick="window.goHome(); toggleMenu();">Home</a></li>
             <li><a href="#" onclick="window.showRecordsPage(); toggleMenu();">My Records</a></li>
             <li><a href="#" onclick="window.showSettings(); toggleMenu();">Settings</a></li>
-            <li><a href="wall-detector.html">Wall Detector</a></li>
         </ul>
     </nav>
 
@@ -201,10 +200,63 @@
                                     ⚠️ <strong>Scale not set</strong> - Labels will use default 1:500
                                 </div>
                             </div>
+
+                            <!-- Wall Detection Controls -->
+                            <div class="wd-controls-panel">
+                                <h5 style="margin-top:0;">🧱 Wall Detection &amp; Labelling</h5>
+                                <div class="wd-ctrl-row">
+                                    <label>Wall colour</label>
+                                    <span id="wdColorSwatch" class="wd-swatch" style="background:#8B6914" title="Sampled wall colour"></span>
+                                    <button type="button" class="btn-secondary btn-sm" id="wdPickColorBtn" onclick="window.startColorPick()" disabled>🎨 Pick</button>
+                                </div>
+                                <div class="wd-ctrl-row">
+                                    <label>Tolerance <span id="wdTolVal" class="wd-val-display">10</span></label>
+                                    <input type="range" id="wdTolerance" min="0" max="50" value="10" oninput="document.getElementById('wdTolVal').textContent=this.value">
+                                </div>
+                                <div class="wd-ctrl-row">
+                                    <label>Min area <span id="wdMinAreaVal" class="wd-val-display">500</span></label>
+                                    <input type="range" id="wdMinArea" min="100" max="5000" step="50" value="500" oninput="document.getElementById('wdMinAreaVal').textContent=this.value">
+                                </div>
+                                <div class="wd-ctrl-row">
+                                    <label><input type="checkbox" id="wdFillHoles" checked> Fill holes</label>
+                                </div>
+                                <div class="wd-ctrl-row">
+                                    <label>Label prefix</label>
+                                    <input type="text" id="wdPrefix" value="RW" maxlength="10" style="width:70px; padding:4px 8px;">
+                                </div>
+                                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                                    <button type="button" class="btn-primary" id="wdDetectBtn" onclick="window.backendDetectWalls()" disabled>🔍 Detect Walls</button>
+                                    <button type="button" class="btn-secondary" id="wdLabelBtn" onclick="window.backendLabelWalls()" disabled>🏷️ Measure &amp; Label</button>
+                                </div>
+                                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                                    <button type="button" class="btn-secondary btn-sm" id="wdExportPng" onclick="window.backendExportPng()" disabled>📷 Export PNG</button>
+                                    <button type="button" class="btn-secondary btn-sm" id="wdExportJson" onclick="window.backendExportJson()" disabled>📄 Export JSON</button>
+                                </div>
+                            </div>
                             
                             <div id="drawingPreview" class="drawing-preview" style="overflow:auto; position:relative;">
                                 <canvas id="drawingCanvas" style="display:block; margin:0 auto;"></canvas>
+                                <canvas id="drawingOverlay" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas>
                             </div>
+
+                            <!-- Wall Detection Results -->
+                            <div id="wdResultsPanel" class="wd-results-panel" style="display:none;">
+                                <h5>📊 Detection Results</h5>
+                                <div class="wd-stats-row">
+                                    <span>Walls: <strong id="wdStatWalls">0</strong></span>
+                                    <span>Labels: <strong id="wdStatLabels">0</strong></span>
+                                    <span>Total: <strong id="wdStatTotalLen">0</strong> m</span>
+                                </div>
+                                <div style="max-height:200px; overflow-y:auto; margin-top:8px;">
+                                    <table class="data-table" style="font-size:12px;">
+                                        <thead><tr><th>ID</th><th>Length (m)</th><th>Labels</th><th>Status</th></tr></thead>
+                                        <tbody id="wdResultsBody">
+                                            <tr><td colspan="4" style="text-align:center;color:#999;">No walls detected yet</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
                             <div id="analysisResults" class="analysis-results"></div>
                         </div>
                     </div>
