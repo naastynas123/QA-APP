@@ -1601,9 +1601,9 @@ let calibrationClicks = [];
 
 window.startScaleCalibration = function() {
     console.log('Starting scale calibration...');
-    const canvas = document.getElementById('analysisCanvas');
+    const canvas = document.getElementById('drawingCanvas');
     if (!canvas) {
-        alert('Canvas not found');
+        alert('Upload a drawing first');
         return;
     }
     
@@ -1613,34 +1613,35 @@ window.startScaleCalibration = function() {
     
     const statusDiv = document.getElementById('scaleStatus');
     if (statusDiv) {
-        statusDiv.innerHTML = '📍 Click first point on canvas (position crosshair)...';
+        statusDiv.innerHTML = '📍 Click first point on the drawing...';
+        statusDiv.style.borderLeftColor = '#2196F3';
     }
     
     const handleCanvasClick = (e) => {
         if (!calibrationMode) return;
         
         const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (e.clientX - rect.left) * scaleX;
+        const y = (e.clientY - rect.top) * scaleY;
         
         calibrationClicks.push({x, y});
-        console.log(`Click ${calibrationClicks.length}: (${x}, ${y})`);
+        console.log(`Calibration click ${calibrationClicks.length}: (${x.toFixed(1)}, ${y.toFixed(1)})`);
         
         if (calibrationClicks.length === 1) {
             if (statusDiv) {
-                statusDiv.innerHTML = '📍 Click second point on canvas...';
+                statusDiv.innerHTML = '📍 Click second point on the drawing...';
             }
         } else if (calibrationClicks.length === 2) {
-            // Calculate pixel distance
             const dx = calibrationClicks[1].x - calibrationClicks[0].x;
             const dy = calibrationClicks[1].y - calibrationClicks[0].y;
             const pixelDistance = Math.sqrt(dx * dx + dy * dy);
             
             calibrationMode = false;
-            canvas.style.cursor = 'default';
+            canvas.style.cursor = 'crosshair';
             canvas.removeEventListener('click', handleCanvasClick);
             
-            // Prompt for real-world distance
             const realWorldDistance = prompt(
                 `Distance between the two points (in metres)?\n\nPixel distance: ${pixelDistance.toFixed(1)}px`,
                 '1'
@@ -1649,6 +1650,7 @@ window.startScaleCalibration = function() {
             if (realWorldDistance === null) {
                 if (statusDiv) {
                     statusDiv.innerHTML = '⚠️ Calibration cancelled';
+                    statusDiv.style.borderLeftColor = '#ff6b6b';
                 }
                 return;
             }
@@ -1658,21 +1660,26 @@ window.startScaleCalibration = function() {
                 alert('Invalid distance entered');
                 if (statusDiv) {
                     statusDiv.innerHTML = '⚠️ Invalid distance entered';
+                    statusDiv.style.borderLeftColor = '#ff6b6b';
                 }
                 return;
             }
             
             globalScale = metres / pixelDistance;
+            window.globalScale = globalScale;
             console.log(`Scale set: 1 pixel = ${globalScale.toFixed(6)} metres`);
             
             if (statusDiv) {
-                statusDiv.innerHTML = `✅ <strong>Scale calibrated</strong>: 1 pixel = ${globalScale.toFixed(4)} metres (1:${(1/globalScale).toFixed(0)})`;
+                statusDiv.innerHTML = `✅ <strong>Scale calibrated</strong>: 1 pixel = ${globalScale.toFixed(4)} metres (1:${Math.round(1/globalScale)})`;
+                statusDiv.style.borderLeftColor = '#10b981';
             }
             
-            // Re-run detection with new scale
+            // Enable label button if walls are detected
+            updateWdButtons();
+            
+            // Also re-run the old client-side labelling
             if (currentImage) {
                 setTimeout(() => {
-                    console.log('Re-running detection with new scale...');
                     autoDetectAndLabel(currentImage);
                 }, 500);
             }
@@ -1684,18 +1691,473 @@ window.startScaleCalibration = function() {
 
 window.setQuickScale = function() {
     console.log('Setting quick scale to 1:500...');
-    globalScale = 1 / 500; // 1 pixel = 1/500 metres = 0.002 metres
+    globalScale = 1 / 500;
+    window.globalScale = globalScale;
     
     const statusDiv = document.getElementById('scaleStatus');
     if (statusDiv) {
         statusDiv.innerHTML = `✅ <strong>Scale set to preset</strong>: 1 pixel = ${globalScale.toFixed(4)} metres (1:500)`;
+        statusDiv.style.borderLeftColor = '#10b981';
     }
     
-    // Re-run detection with new scale
+    updateWdButtons();
+    
     if (currentImage) {
         console.log('Re-running detection with preset scale...');
         autoDetectAndLabel(currentImage);
     }
+};
+
+// =========================================================================
+// BACKEND WALL DETECTION & LABELLING INTEGRATION
+// Communicates with Python FastAPI backend (port 8001)
+// =========================================================================
+
+const WD_BACKEND_URL = "http://localhost:8001";
+
+// State for backend-detected walls/labels
+let wdWalls = [];
+let wdLabels = [];
+let wdImageBase64 = null; // raw base64 (no data-url prefix) for API
+
+/** POST JSON to backend */
+async function wdApiPost(endpoint, body) {
+    console.log(`[WD] POST ${endpoint}`);
+    const res = await fetch(`${WD_BACKEND_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`${res.status}: ${detail}`);
+    }
+    return res.json();
+}
+
+/** Convert RGB to OpenCV HSV (H 0-179, S 0-255, V 0-255) */
+function rgbToHsvCV(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const d = max - min;
+    let h = 0, s = 0, v = max;
+    if (d > 0) {
+        s = d / max;
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+        else if (max === g) h = ((b - r) / d + 2) / 6;
+        else h = ((r - g) / d + 4) / 6;
+    }
+    return { h: Math.round(h * 179), s: Math.round(s * 255), v: Math.round(v * 255) };
+}
+
+// Default brown HSV
+let wdBrownHSV = { h: 15, s: 120, v: 120 };
+let wdPickingColor = false;
+
+/** Enable/disable wall-detect buttons based on state */
+function updateWdButtons() {
+    const hasImage = !!wdImageBase64;
+    const hasWalls = wdWalls.length > 0;
+    
+    const measureBtn = document.getElementById('wdMeasureBtn');
+    const exportPng = document.getElementById('wdExportPng');
+    const exportJson = document.getElementById('wdExportJson');
+    const pickBtn = document.getElementById('wdPickColorBtn');
+    
+    if (measureBtn) measureBtn.disabled = !hasImage;
+    if (exportPng) exportPng.disabled = !hasWalls;
+    if (exportJson) exportJson.disabled = !hasWalls;
+    if (pickBtn) pickBtn.disabled = !hasImage;
+}
+
+/** Called when an image is loaded – stores base64 for API calls */
+function wdSetImageBase64(dataUrl) {
+    if (!dataUrl) { wdImageBase64 = null; return; }
+    wdImageBase64 = dataUrl.replace(/^data:[^;]+;base64,/, "");
+    wdWalls = [];
+    wdLabels = [];
+    ensureDefaultScale();
+    updateWdButtons();
+}
+
+/** Auto-apply the default scale if none is set */
+function ensureDefaultScale() {
+    if (!globalScale || globalScale <= 0) {
+        const presetEl = document.getElementById('wdScalePreset');
+        const denom = presetEl ? parseInt(presetEl.value, 10) : 500;
+        globalScale = 1 / denom;
+        window.globalScale = globalScale;
+    }
+}
+
+/** Colour picker – sample colour from canvas on click */
+window.startColorPick = function() {
+    const canvas = document.getElementById('drawingCanvas');
+    if (!canvas) return;
+    wdPickingColor = true;
+    canvas.style.cursor = 'crosshair';
+    
+    const pickHandler = (e) => {
+        if (!wdPickingColor) return;
+        wdPickingColor = false;
+        canvas.style.cursor = 'crosshair';
+        canvas.removeEventListener('click', pickHandler);
+        
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = Math.round((e.clientX - rect.left) * scaleX);
+        const y = Math.round((e.clientY - rect.top) * scaleY);
+        
+        const ctx = canvas.getContext('2d');
+        const px = ctx.getImageData(x, y, 1, 1).data;
+        const r = px[0], g = px[1], b = px[2];
+        wdBrownHSV = rgbToHsvCV(r, g, b);
+        
+        const swatch = document.getElementById('wdColorSwatch');
+        if (swatch) swatch.style.background = `rgb(${r},${g},${b})`;
+        console.log(`[WD] Picked colour RGB(${r},${g},${b}) → HSV(${wdBrownHSV.h},${wdBrownHSV.s},${wdBrownHSV.v})`);
+    };
+    
+    canvas.addEventListener('click', pickHandler);
+};
+
+/** Apply a scale preset from the dropdown */
+window.applyScalePreset = function(denominator) {
+    const denom = parseInt(denominator, 10);
+    if (isNaN(denom) || denom <= 0) return;
+    globalScale = 1 / denom;
+    window.globalScale = globalScale;
+    const statusDiv = document.getElementById('scaleStatus');
+    if (statusDiv) {
+        statusDiv.innerHTML = `📏 Scale: <strong>1:${denom}</strong>`;
+        statusDiv.style.borderLeftColor = '#10b981';
+    }
+    console.log(`[WD] Scale set to 1:${denom}`);
+};
+
+/** One-click: detect walls + label them in a single action */
+window.measureAndLabel = async function() {
+    if (!wdImageBase64) { alert('Upload a drawing first.'); return; }
+    
+    const measureBtn = document.getElementById('wdMeasureBtn');
+    
+    // Step 1: Auto-apply scale if not set
+    ensureDefaultScale();
+    
+    if (measureBtn) measureBtn.textContent = '⏳ Detecting walls...';
+    
+    try {
+        // Step 2: Detect walls
+        const tol = parseInt(document.getElementById('wdTolerance')?.value || '10', 10);
+        const hsv = wdBrownHSV;
+        const detectBody = {
+            image_base64: wdImageBase64,
+            brown_hsv_lower: { h: Math.max(0, hsv.h - tol), s: Math.max(0, hsv.s - 40), v: Math.max(0, hsv.v - 60) },
+            brown_hsv_upper: { h: Math.min(179, hsv.h + tol), s: Math.min(255, hsv.s + 40), v: Math.min(255, hsv.v + 60) },
+            tolerance: tol,
+            min_area: parseInt(document.getElementById('wdMinArea')?.value || '500', 10),
+            fill_holes: document.getElementById('wdFillHoles')?.checked ?? true,
+        };
+        
+        const detectData = await wdApiPost("/detect_walls", detectBody);
+        wdWalls = detectData.walls || [];
+        wdLabels = [];
+        console.log(`[WD] Detected ${detectData.wall_count} wall(s)`);
+        
+        if (wdWalls.length === 0) {
+            renderWdOverlay();
+            updateWdResults();
+            updateWdButtons();
+            alert('No walls detected. Try adjusting the tolerance or wall colour in Advanced Settings.');
+            return;
+        }
+        
+        // Step 3: Label walls
+        if (measureBtn) measureBtn.textContent = '⏳ Placing labels...';
+        
+        const spacing = parseFloat(document.getElementById('testInterval')?.value || '5');
+        const prefix = document.getElementById('wdPrefix')?.value || 'RW';
+        
+        const labelBody = {
+            walls: wdWalls,
+            scale_metres_per_pixel: globalScale,
+            spacing_metres: spacing,
+            prefix: prefix,
+            min_remaining_fraction: 0.5,
+        };
+        
+        const labelData = await wdApiPost("/label_walls", labelBody);
+        wdLabels = labelData.labels || [];
+        console.log(`[WD] Placed ${labelData.label_count} label(s)`);
+        
+        renderWdOverlay();
+        updateWdResults();
+        updateWdButtons();
+        
+        // Populate the test results table
+        window.populateTestResultsTable(labelData.label_count);
+        
+        alert(`✅ Done! Found ${wdWalls.length} wall(s) and placed ${labelData.label_count} label(s).`);
+    } catch (err) {
+        console.error('[WD] Measure & Label error:', err);
+        alert('Measure & Label failed: ' + err.message);
+    } finally {
+        if (measureBtn) measureBtn.textContent = '📏 Measure & Label';
+    }
+};
+
+/** Detect walls via backend */
+window.backendDetectWalls = async function() {
+    if (!wdImageBase64) { alert('Upload a drawing first.'); return; }
+    
+    const tol = parseInt(document.getElementById('wdTolerance')?.value || '10', 10);
+    const hsv = wdBrownHSV;
+    const body = {
+        image_base64: wdImageBase64,
+        brown_hsv_lower: { h: Math.max(0, hsv.h - tol), s: Math.max(0, hsv.s - 40), v: Math.max(0, hsv.v - 60) },
+        brown_hsv_upper: { h: Math.min(179, hsv.h + tol), s: Math.min(255, hsv.s + 40), v: Math.min(255, hsv.v + 60) },
+        tolerance: tol,
+        min_area: parseInt(document.getElementById('wdMinArea')?.value || '500', 10),
+        fill_holes: document.getElementById('wdFillHoles')?.checked ?? true,
+    };
+    
+    const detectBtn = document.getElementById('wdDetectBtn');
+    if (detectBtn) detectBtn.textContent = '⏳ Detecting...';
+    
+    try {
+        const data = await wdApiPost("/detect_walls", body);
+        wdWalls = data.walls || [];
+        wdLabels = [];
+        console.log(`[WD] Detected ${data.wall_count} wall(s)`);
+        renderWdOverlay();
+        updateWdResults();
+        updateWdButtons();
+        alert(`✅ Detected ${data.wall_count} wall(s). Click "Measure & Label" to place labels.`);
+    } catch (err) {
+        console.error('[WD] Detection error:', err);
+        alert('Wall detection failed: ' + err.message + '\n\nMake sure the backend is running on port 8001.');
+    } finally {
+        if (detectBtn) detectBtn.textContent = '🔍 Detect Walls';
+    }
+};
+
+/** Label walls via backend */
+window.backendLabelWalls = async function() {
+    if (!wdWalls.length) { alert('Detect walls first.'); return; }
+    if (!globalScale || globalScale <= 0) { alert('Set the scale first (calibrate or use preset).'); return; }
+    
+    const spacing = parseFloat(document.getElementById('testInterval')?.value || '5');
+    const prefix = document.getElementById('wdPrefix')?.value || 'RW';
+    
+    const body = {
+        walls: wdWalls,
+        scale_metres_per_pixel: globalScale,
+        spacing_metres: spacing,
+        prefix: prefix,
+        min_remaining_fraction: 0.5,
+    };
+    
+    const labelBtn = document.getElementById('wdLabelBtn');
+    if (labelBtn) labelBtn.textContent = '⏳ Labelling...';
+    
+    try {
+        const data = await wdApiPost("/label_walls", body);
+        wdLabels = data.labels || [];
+        console.log(`[WD] Placed ${data.label_count} label(s)`);
+        renderWdOverlay();
+        updateWdResults();
+        updateWdButtons();
+        
+        // Also populate the test results table with the detected label count
+        window.populateTestResultsTable(data.label_count);
+        
+        alert(`✅ Placed ${data.label_count} label(s) across ${wdWalls.length} wall(s).`);
+    } catch (err) {
+        console.error('[WD] Labelling error:', err);
+        alert('Labelling failed: ' + err.message);
+    } finally {
+        if (labelBtn) labelBtn.textContent = '🏷️ Measure & Label';
+    }
+};
+
+/** Export annotated PNG via backend */
+window.backendExportPng = async function() {
+    if (!wdImageBase64 || !wdWalls.length) return;
+    
+    const body = {
+        image_base64: wdImageBase64,
+        walls: wdWalls,
+        labels: wdLabels,
+    };
+    
+    try {
+        const data = await wdApiPost("/export", body);
+        const a = document.createElement("a");
+        a.href = "data:image/png;base64," + data.annotated_image_base64;
+        a.download = "wall-detection-export.png";
+        a.click();
+    } catch (err) {
+        console.error('[WD] Export error:', err);
+        alert('Export failed: ' + err.message);
+    }
+};
+
+/** Export JSON of wall/label data */
+window.backendExportJson = function() {
+    const payload = {
+        scale_metres_per_pixel: globalScale,
+        walls: wdWalls,
+        labels: wdLabels,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "wall-detection-data.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+};
+
+/** Render wall outlines and labels on the overlay canvas */
+function renderWdOverlay() {
+    const canvas = document.getElementById('drawingCanvas');
+    const overlay = document.getElementById('drawingOverlay');
+    if (!canvas || !overlay) return;
+    
+    overlay.width = canvas.width;
+    overlay.height = canvas.height;
+    // Match the overlay display size to the drawing canvas
+    const canvasRect = canvas.getBoundingClientRect();
+    overlay.style.width = canvasRect.width + 'px';
+    overlay.style.height = canvasRect.height + 'px';
+    
+    const ctx = overlay.getContext('2d');
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    
+    // Draw wall polylines (red)
+    for (const wall of wdWalls) {
+        const pts = wall.polyline;
+        if (!pts || pts.length < 2) continue;
+        
+        ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+            ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        ctx.stroke();
+    }
+    
+    // Draw labels
+    for (const lbl of wdLabels) {
+        // Callout line
+        if (lbl.callout) {
+            ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(lbl.callout.start.x, lbl.callout.start.y);
+            ctx.lineTo(lbl.callout.end.x, lbl.callout.end.y);
+            ctx.stroke();
+        }
+        
+        // Yellow circle marker at position
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+        ctx.beginPath();
+        ctx.arc(lbl.position.x, lbl.position.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // Label text
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 11px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        // Show just the label number part for readability
+        const shortText = lbl.text || '';
+        const numPart = shortText.split('-').pop() || shortText;
+        ctx.fillText(numPart, lbl.position.x, lbl.position.y);
+        
+        // Full label text near callout end
+        if (lbl.callout && lbl.callout.end) {
+            ctx.font = 'bold 10px Arial';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            
+            const tx = lbl.callout.end.x + 2;
+            const ty = lbl.callout.end.y - 2;
+            const tm = ctx.measureText(lbl.text);
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.85)';
+            ctx.fillRect(tx - 1, ty - 11, tm.width + 4, 14);
+            ctx.fillStyle = '#000';
+            ctx.fillText(lbl.text, tx, ty);
+        }
+    }
+}
+
+/** Update the results panel with wall data */
+function updateWdResults() {
+    const panel = document.getElementById('wdResultsPanel');
+    if (panel) panel.style.display = wdWalls.length > 0 ? 'block' : 'none';
+    
+    const statWalls = document.getElementById('wdStatWalls');
+    const statLabels = document.getElementById('wdStatLabels');
+    const statTotal = document.getElementById('wdStatTotalLen');
+    const tbody = document.getElementById('wdResultsBody');
+    
+    if (statWalls) statWalls.textContent = wdWalls.length;
+    if (statLabels) statLabels.textContent = wdLabels.length;
+    
+    let totalLen = 0;
+    if (tbody) {
+        if (wdWalls.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999;">No walls detected yet</td></tr>';
+        } else {
+            let html = '';
+            for (const w of wdWalls) {
+                const lenM = globalScale ? (w.length_pixels * globalScale) : 0;
+                totalLen += lenM;
+                const wallLabels = wdLabels.filter(l => l.wall_id === w.wall_id);
+                const statusText = wallLabels.length > 0 ? '✅ Labelled' : '⬜ Detected';
+                html += `<tr>
+                    <td>${w.wall_id}</td>
+                    <td>${globalScale ? lenM.toFixed(2) : (w.length_pixels.toFixed(0) + 'px')}</td>
+                    <td>${wallLabels.length}</td>
+                    <td>${statusText}</td>
+                </tr>`;
+            }
+            tbody.innerHTML = html;
+        }
+    }
+    if (statTotal) statTotal.textContent = totalLen > 0 ? totalLen.toFixed(1) : '0';
+}
+
+// Hook: when an image is displayed for analysis, also prepare for backend detection
+window.displayImageForAnalysis = function(dataUrl) {
+    // Store base64 for backend API calls
+    wdSetImageBase64(dataUrl);
+    
+    // Call original display function
+    const canvas = document.getElementById('drawingCanvas');
+    const analysisSection = document.getElementById('analysisSection');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.onload = function() {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        if (analysisSection) analysisSection.classList.remove('hidden');
+        
+        // Also run the old client-side detection
+        if (typeof window.autoDetectAndLabel === 'function') {
+            window.autoDetectAndLabel(dataUrl);
+        }
+    };
+    img.src = dataUrl;
 };
 
 document.addEventListener('DOMContentLoaded', () => {

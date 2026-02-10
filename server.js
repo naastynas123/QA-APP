@@ -29,6 +29,7 @@ const server = http.createServer((req, res) => {
     });
 });
 
-server.listen(8000, '127.0.0.1', () => {
-    console.log('QA App running at http://localhost:8000');
+const HOST = process.env.HOST || '127.0.0.1';
+server.listen(8000, HOST, () => {
+    console.log(`QA App running at http://${HOST}:8000`);
 });

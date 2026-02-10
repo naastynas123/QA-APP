@@ -1,0 +1,459 @@
+/* wall-detector.css – Three-panel wall detection layout */
+
+:root {
+    --wd-primary: #6366f1;
+    --wd-secondary: #06b6d4;
+    --wd-accent: #ec4899;
+    --wd-success: #10b981;
+    --wd-danger: #ef4444;
+    --wd-warning: #f59e0b;
+    --wd-bg: #f1f5f9;
+    --wd-surface: #ffffff;
+    --wd-border: #e2e8f0;
+    --wd-text: #1e293b;
+    --wd-text-muted: #64748b;
+    --wd-panel-width: 300px;
+    --wd-header-height: 50px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body.wd-body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--wd-bg);
+    color: var(--wd-text);
+    line-height: 1.5;
+    overflow: hidden;
+    height: 100vh;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.wd-header {
+    height: var(--wd-header-height);
+    background: var(--wd-primary);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 12px;
+    flex-shrink: 0;
+}
+.wd-header h1 { font-size: 16px; font-weight: 600; }
+.wd-header a {
+    color: rgba(255,255,255,0.8);
+    text-decoration: none;
+    font-size: 13px;
+}
+.wd-header a:hover { color: #fff; }
+
+/* ── Layout ─────────────────────────────────────────────── */
+.wd-layout {
+    display: flex;
+    height: calc(100vh - var(--wd-header-height));
+}
+
+/* ── Panels (left + right) ──────────────────────────────── */
+.wd-panel {
+    width: var(--wd-panel-width);
+    background: var(--wd-surface);
+    border-right: 1px solid var(--wd-border);
+    overflow-y: auto;
+    flex-shrink: 0;
+    padding: 12px;
+}
+.wd-panel-right {
+    border-right: none;
+    border-left: 1px solid var(--wd-border);
+}
+
+.wd-section {
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--wd-border);
+}
+.wd-section:last-child { border-bottom: none; }
+
+.wd-section h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--wd-text-muted);
+    margin-bottom: 8px;
+}
+
+/* ── Form controls ──────────────────────────────────────── */
+.wd-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.wd-row label {
+    font-size: 13px;
+    min-width: 80px;
+    flex-shrink: 0;
+}
+.wd-row input[type="range"] { flex: 1; }
+.wd-row .wd-val {
+    font-size: 12px;
+    color: var(--wd-text-muted);
+    min-width: 32px;
+    text-align: right;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--wd-border);
+    border-radius: 6px;
+    font-size: 13px;
+    background: var(--wd-surface);
+    color: var(--wd-text);
+}
+input[type="number"] { width: 80px; }
+select { cursor: pointer; }
+
+input[type="file"] { font-size: 12px; width: 100%; }
+
+.wd-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    margin-bottom: 6px;
+}
+.wd-checkbox input { margin: 0; }
+
+/* ── Buttons ────────────────────────────────────────────── */
+.wd-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    width: 100%;
+    margin-bottom: 6px;
+}
+.wd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.wd-btn-primary { background: var(--wd-primary); color: #fff; }
+.wd-btn-primary:hover:not(:disabled) { background: #4f46e5; }
+
+.wd-btn-secondary { background: var(--wd-secondary); color: #fff; }
+.wd-btn-secondary:hover:not(:disabled) { background: #0891b2; }
+
+.wd-btn-success { background: var(--wd-success); color: #fff; }
+.wd-btn-success:hover:not(:disabled) { background: #059669; }
+
+.wd-btn-outline {
+    background: transparent;
+    color: var(--wd-primary);
+    border: 1px solid var(--wd-border);
+}
+.wd-btn-outline:hover:not(:disabled) { background: #f8fafc; }
+
+.wd-btn-sm { padding: 5px 10px; font-size: 12px; }
+
+.wd-btn-group {
+    display: flex;
+    gap: 6px;
+}
+.wd-btn-group .wd-btn { flex: 1; }
+
+/* ── Color swatch ───────────────────────────────────────── */
+.wd-color-preview {
+    display: inline-block;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    border: 2px solid var(--wd-border);
+    vertical-align: middle;
+    cursor: pointer;
+}
+
+/* ── Status badges ──────────────────────────────────────── */
+.wd-status {
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    display: inline-block;
+}
+.wd-status-idle { background: #f1f5f9; color: var(--wd-text-muted); }
+.wd-status-active { background: #dbeafe; color: #2563eb; }
+.wd-status-done { background: #d1fae5; color: #059669; }
+.wd-status-error { background: #fee2e2; color: #dc2626; }
+
+/* ── Main canvas area ───────────────────────────────────── */
+.wd-canvas-area {
+    flex: 1;
+    position: relative;
+    background: #334155;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wd-canvas-container {
+    position: absolute;
+    top: 0; left: 0;
+    transform-origin: 0 0;
+}
+
+#wdCanvas {
+    display: block;
+}
+
+.wd-canvas-placeholder {
+    color: rgba(255,255,255,0.4);
+    text-align: center;
+    font-size: 14px;
+    pointer-events: none;
+    position: absolute;
+}
+
+/* ── Zoom controls ──────────────────────────────────────── */
+.wd-zoom-controls {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    display: flex;
+    gap: 4px;
+    z-index: 10;
+}
+.wd-zoom-controls button {
+    width: 32px;
+    height: 32px;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(0,0,0,0.5);
+    color: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.wd-zoom-controls button:hover { background: rgba(0,0,0,0.7); }
+
+.wd-zoom-label {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.6);
+    background: rgba(0,0,0,0.4);
+    padding: 2px 8px;
+    border-radius: 4px;
+    z-index: 10;
+}
+
+/* ── Canvas cursor states ───────────────────────────────── */
+.wd-cursor-crosshair { cursor: crosshair !important; }
+.wd-cursor-grab { cursor: grab !important; }
+.wd-cursor-grabbing { cursor: grabbing !important; }
+.wd-cursor-eyedropper { cursor: crosshair !important; }
+
+/* ── Right panel: results table ─────────────────────────── */
+.wd-results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.wd-results-table th {
+    text-align: left;
+    padding: 6px 4px;
+    border-bottom: 2px solid var(--wd-border);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--wd-text-muted);
+}
+.wd-results-table td {
+    padding: 5px 4px;
+    border-bottom: 1px solid var(--wd-border);
+}
+.wd-results-table tr:hover { background: #f8fafc; }
+.wd-results-table tr.wd-row-highlight { background: #dbeafe; }
+.wd-results-table tr { cursor: pointer; }
+
+/* ── Summary stats ──────────────────────────────────────── */
+.wd-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+.wd-stat-card {
+    background: #f8fafc;
+    border-radius: 6px;
+    padding: 8px;
+    text-align: center;
+}
+.wd-stat-card .wd-stat-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--wd-primary);
+}
+.wd-stat-card .wd-stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--wd-text-muted);
+}
+
+/* ── Debug log ──────────────────────────────────────────── */
+.wd-debug-toggle {
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--wd-text-muted);
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.wd-debug-toggle:hover { color: var(--wd-text); }
+
+.wd-debug-log {
+    max-height: 200px;
+    overflow-y: auto;
+    background: #0f172a;
+    color: #94a3b8;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px;
+    padding: 8px;
+    border-radius: 6px;
+    margin-top: 6px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* ── Loading overlay ────────────────────────────────────── */
+.wd-loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+.wd-loading-overlay.wd-hidden { display: none; }
+
+.wd-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(255,255,255,0.2);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: wd-spin 0.7s linear infinite;
+}
+@keyframes wd-spin { to { transform: rotate(360deg); } }
+
+.wd-loading-text {
+    color: #fff;
+    font-size: 13px;
+    margin-top: 8px;
+    text-align: center;
+}
+
+/* ── Toast notification ─────────────────────────────────── */
+.wd-toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: #1e293b;
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    z-index: 1000;
+    transition: transform 0.3s ease;
+    pointer-events: none;
+}
+.wd-toast.wd-toast-show {
+    transform: translateX(-50%) translateY(0);
+}
+
+/* ── Scale calibration click markers ────────────────────── */
+.wd-calib-marker {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--wd-danger);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 20;
+}
+.wd-calib-marker::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 4px; height: 4px;
+    background: var(--wd-danger);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 1024px) {
+    .wd-layout { flex-direction: column; }
+    .wd-panel {
+        width: 100%;
+        max-height: 35vh;
+        border-right: none;
+        border-bottom: 1px solid var(--wd-border);
+    }
+    .wd-panel-right {
+        border-left: none;
+        border-top: 1px solid var(--wd-border);
+        border-bottom: none;
+    }
+    .wd-canvas-area { min-height: 40vh; }
+}
+
+@media (max-width: 640px) {
+    .wd-header h1 { font-size: 14px; }
+    .wd-panel { padding: 8px; }
+    :root { --wd-panel-width: 100%; }
+}
+
+/* ── PDF page selector ──────────────────────────────────── */
+.wd-pdf-pages { margin-top: 6px; }
+.wd-pdf-pages.wd-hidden { display: none; }
+
+/* ── Utility ────────────────────────────────────────────── */
+.wd-hidden { display: none !important; }
+
+/* ── Modal ──────────────────────────────────────────────── */
+.wd-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+}
+.wd-modal {
+    background: var(--wd-surface);
+    border-radius: 10px;
+    padding: 20px;
+    min-width: 280px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+}
+.wd-modal h3 { margin-bottom: 8px; }
+.wd-modal input[type="number"] { margin-top: 8px; margin-bottom: 12px; }
+.wd-mt-4 { margin-top: 4px; }
+.wd-mt-8 { margin-top: 8px; }
+.wd-mb-6 { margin-bottom: 6px; }
+.wd-text-sm { font-size: 12px; }
+.wd-text-muted { color: var(--wd-text-muted); }

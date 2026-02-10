@@ -188,22 +188,87 @@
                         <div id="analysisSection" class="analysis-section hidden">
                             <h4>Image Analysis</h4>
                             
-                            <!-- Scale Calibration Panel -->
-                            <div style="background:#f0f0f0; padding:12px; border-radius:6px; margin-bottom:12px;">
-                                <h5 style="margin-top:0;">🎯 Scale Calibration (REQUIRED for labels)</h5>
-                                <p style="margin:8px 0; font-size:0.9em; color:#666;">Labels won't appear unless you set the scale!</p>
-                                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
-                                    <button type="button" class="btn-primary" onclick="window.startScaleCalibration()" style="background:#ff6b6b;">📏 Calibrate Scale (2-Click)</button>
-                                    <button type="button" class="btn-secondary" onclick="window.setQuickScale()">⚡ Use Preset (1:500)</button>
+                            <!-- Scale preset (collapsed by default — auto-applied) -->
+                            <div id="scaleStatus" style="padding:8px; background:#f0f0f0; border-radius:4px; border-left:4px solid #10b981; font-size:0.85em; margin-bottom:12px;">
+                                📏 Scale: <strong>1:500</strong> (default) — adjust below if needed
+                            </div>
+
+                            <!-- Wall Detection Controls -->
+                            <div class="wd-controls-panel">
+                                <h5 style="margin-top:0;">🧱 Wall Detection &amp; Labelling</h5>
+
+                                <!-- Main action button -->
+                                <div style="margin-bottom:10px;">
+                                    <button type="button" class="btn-primary" id="wdMeasureBtn" onclick="window.measureAndLabel()" disabled style="width:100%; padding:12px; font-size:1em;">
+                                        📏 Measure &amp; Label
+                                    </button>
                                 </div>
-                                <div id="scaleStatus" style="padding:8px; background:white; border-radius:4px; border-left:4px solid #ff6b6b; font-size:0.85em;">
-                                    ⚠️ <strong>Scale not set</strong> - Labels will use default 1:500
+
+                                <!-- Optional advanced settings (collapsed) -->
+                                <details style="margin-top:8px;">
+                                    <summary style="cursor:pointer; font-size:0.9em; color:#666;">⚙️ Advanced Settings</summary>
+                                    <div style="padding:8px 0;">
+                                        <div class="wd-ctrl-row">
+                                            <label>Scale preset</label>
+                                            <select id="wdScalePreset" onchange="window.applyScalePreset(this.value)" style="padding:4px 8px;">
+                                                <option value="500" selected>1:500</option>
+                                                <option value="200">1:200</option>
+                                                <option value="100">1:100</option>
+                                                <option value="1000">1:1000</option>
+                                            </select>
+                                        </div>
+                                        <div class="wd-ctrl-row">
+                                            <label>Wall colour</label>
+                                            <span id="wdColorSwatch" class="wd-swatch" style="background:#8B6914" title="Sampled wall colour"></span>
+                                            <button type="button" class="btn-secondary btn-sm" id="wdPickColorBtn" onclick="window.startColorPick()" disabled>🎨 Pick</button>
+                                        </div>
+                                        <div class="wd-ctrl-row">
+                                            <label>Tolerance <span id="wdTolVal" class="wd-val-display">10</span></label>
+                                            <input type="range" id="wdTolerance" min="0" max="50" value="10" oninput="document.getElementById('wdTolVal').textContent=this.value">
+                                        </div>
+                                        <div class="wd-ctrl-row">
+                                            <label>Min area <span id="wdMinAreaVal" class="wd-val-display">500</span></label>
+                                            <input type="range" id="wdMinArea" min="100" max="5000" step="50" value="500" oninput="document.getElementById('wdMinAreaVal').textContent=this.value">
+                                        </div>
+                                        <div class="wd-ctrl-row">
+                                            <label><input type="checkbox" id="wdFillHoles" checked> Fill holes</label>
+                                        </div>
+                                        <div class="wd-ctrl-row">
+                                            <label>Label prefix</label>
+                                            <input type="text" id="wdPrefix" value="RW" maxlength="10" style="width:70px; padding:4px 8px;">
+                                        </div>
+                                    </div>
+                                </details>
+
+                                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                                    <button type="button" class="btn-secondary btn-sm" id="wdExportPng" onclick="window.backendExportPng()" disabled>📷 Export PNG</button>
+                                    <button type="button" class="btn-secondary btn-sm" id="wdExportJson" onclick="window.backendExportJson()" disabled>📄 Export JSON</button>
                                 </div>
                             </div>
                             
                             <div id="drawingPreview" class="drawing-preview" style="overflow:auto; position:relative;">
                                 <canvas id="drawingCanvas" style="display:block; margin:0 auto;"></canvas>
+                                <canvas id="drawingOverlay" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas>
                             </div>
+
+                            <!-- Wall Detection Results -->
+                            <div id="wdResultsPanel" class="wd-results-panel" style="display:none;">
+                                <h5>📊 Detection Results</h5>
+                                <div class="wd-stats-row">
+                                    <span>Walls: <strong id="wdStatWalls">0</strong></span>
+                                    <span>Labels: <strong id="wdStatLabels">0</strong></span>
+                                    <span>Total: <strong id="wdStatTotalLen">0</strong> m</span>
+                                </div>
+                                <div style="max-height:200px; overflow-y:auto; margin-top:8px;">
+                                    <table class="data-table" style="font-size:12px;">
+                                        <thead><tr><th>ID</th><th>Length (m)</th><th>Labels</th><th>Status</th></tr></thead>
+                                        <tbody id="wdResultsBody">
+                                            <tr><td colspan="4" style="text-align:center;color:#999;">No walls detected yet</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
                             <div id="analysisResults" class="analysis-results"></div>
                         </div>
                     </div>
